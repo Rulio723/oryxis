@@ -2433,6 +2433,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "Senha de {target}",
         "zmodem_orphans_busy" => "Um download está sendo recebido na mesma pasta, então nada foi movido. Os arquivos pendentes continuam lá e serão oferecidos de novo na próxima abertura.",
         "selection_hidden" => "{n} fora de vista",
+        "proxy_output_title" => "O proxy diz",
+        "proxy_open_link" => "Abrir link",
 _ => return None,
     })
 }

@@ -8,6 +8,21 @@
 use super::*;
 
 impl Oryxis {
+    /// Abort the dial the progress card tracks, if it is still running.
+    /// Answers whether one was aborted.
+    pub(crate) fn abort_progress_dial(&mut self) -> bool {
+        match self.connecting.as_mut() {
+            Some(p) if !p.failed => match p.dial_task.take() {
+                Some(handle) => {
+                    handle.abort();
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        }
+    }
+
     pub(super) fn handle_ssh_progress(&mut self, message: SshMessage) -> Task<Message> {
         match message {
             SshMessage::SshProgress(pane_id, step, log) => {
@@ -26,6 +41,11 @@ impl Oryxis {
                 }
             }
             SshMessage::SshCloseProgress => {
+                // Closing the card while the dial is still running STOPS
+                // it: the task is aborted, and the transport's
+                // `kill_on_drop` takes a command proxy (one parked on a
+                // browser login, issue #223) down with it.
+                self.abort_progress_dial();
                 // Close connection progress, remove the tab
                 if let Some(ref progress) = self.connecting {
                     let tab_idx = progress.tab_idx;
@@ -76,7 +96,14 @@ impl Oryxis {
                                 let _ = tx.try_send(false);
                             }
                         }
-                        self.pending_edit_cancel = true;
+                        // An aborted dial reports nothing, so there is no
+                        // error to swallow; arming the swallow anyway would
+                        // eat the NEXT connect's real error. Only a dial
+                        // that cannot be aborted (Telnet / Serial carry no
+                        // handle) still owes the cancel-provoked error.
+                        if !self.abort_progress_dial() {
+                            self.pending_edit_cancel = true;
+                        }
                     }
                     self.connecting = None;
                     // The switch parked for this connect dies with it.
@@ -175,6 +202,28 @@ impl Oryxis {
                 {
                     let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
                     state.process(normalized.as_bytes());
+                }
+            }
+            SshMessage::SshProxyOutput(pane_id, line) => {
+                // Card copy only, scoped to the dial this card tracks, and
+                // capped: a proxy that prints forever must not grow it.
+                const PROXY_LINES_CAP: usize = 200;
+                if !line.trim().is_empty()
+                    && let Some(p) = self.connecting.as_mut().filter(|p| p.pane_id == pane_id)
+                    && p.proxy_output.len() < PROXY_LINES_CAP
+                {
+                    p.proxy_output.push(line);
+                }
+            }
+            SshMessage::SshPaneProxyOutput(pane_id, line) => {
+                // Split-pane / in-place dial: no card, so the proxy's words
+                // land in the pane as dim marker lines, the way the
+                // "[connecting to ...]" line does.
+                if !line.trim().is_empty()
+                    && let Some(pane) = self.pane_by_id_mut(pane_id)
+                    && let Ok(mut state) = pane.terminal.lock()
+                {
+                    state.process(format!("\x1b[2m{}\x1b[0m\r\n", line.trim_end()).as_bytes());
                 }
             }
             SshMessage::SshPaneBanner(pane_id, text) => {

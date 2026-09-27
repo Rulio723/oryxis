@@ -2452,6 +2452,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "رمز عبور {target}",
         "zmodem_orphans_busy" => "یک دانلود در حال دریافت در همان پوشه است، بنابراین چیزی جابه‌جا نشد. فایل‌های منتظر همان‌جا می‌مانند و در اجرای بعدی دوباره پیشنهاد می‌شوند.",
         "selection_hidden" => "{n} مورد نمایش داده نشده",
+        "proxy_output_title" => "پیام پراکسی",
+        "proxy_open_link" => "باز کردن پیوند",
 _ => return None,
     })
 }

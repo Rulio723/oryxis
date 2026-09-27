@@ -173,6 +173,8 @@ impl Oryxis {
             tab_idx,
             pane_id,
             banner: None,
+            proxy_output: Vec::new(),
+            dial_task: None,
         });
         self.active_tab = Some(tab_idx);
         self.remember_terminal_tab_focus(tab_idx);

@@ -2432,6 +2432,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "{target} 的密碼",
         "zmodem_orphans_busy" => "同一個資料夾正在接收下載，因此沒有移動任何檔案。等待中的檔案會留在那裡，並在下次啟動時再次提供。",
         "selection_hidden" => "{n} 個未顯示",
+        "proxy_output_title" => "代理輸出",
+        "proxy_open_link" => "開啟連結",
 _ => return None,
     })
 }

@@ -443,6 +443,18 @@ pub(crate) struct ConnectionProgress {
     /// banners concatenate. Also written to the tab's terminal, where
     /// it lands in scrollback.
     pub banner: Option<String>,
+    /// What a command proxy printed while this dial was pending (its
+    /// stderr, and the lines before the SSH banner where a proxy that
+    /// refreshes credentials puts its login instructions, issue #223).
+    /// Capped like the banner: it is a local process's output, but an
+    /// endless one must not grow the card without bound.
+    pub proxy_output: Vec<String>,
+    /// The task carrying this dial, so closing the card (or leaving it
+    /// for the editor) STOPS the dial and, through the transport's
+    /// `kill_on_drop`, the proxy process. A plain handle, never
+    /// `abort_on_drop`: the same task carries the session after it
+    /// connects, when this card is dropped.
+    pub dial_task: Option<iced::task::Handle>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -481,6 +493,8 @@ pub(crate) enum SshStreamMsg {
     Progress(ConnectionStep, String), // (step, log message)
     /// Pre-auth banner from the server (RFC 4252 §5.4).
     Banner(String),
+    /// One line a command proxy printed while the dial is pending.
+    ProxyOutput(String),
     Connected(Arc<SshSession>),
     HostKeyVerify(oryxis_ssh::HostKeyQuery),
     ProxyCommandVerify(oryxis_ssh::ProxyCommandQuery),

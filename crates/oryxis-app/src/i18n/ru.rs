@@ -2432,6 +2432,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "Пароль для {target}",
         "zmodem_orphans_busy" => "В ту же папку сейчас принимается загрузка, поэтому ничего не перемещено. Ожидающие файлы остаются там и будут предложены снова при следующем запуске.",
         "selection_hidden" => "{n} не показано",
+        "proxy_output_title" => "Сообщение прокси",
+        "proxy_open_link" => "Открыть ссылку",
 _ => return None,
     })
 }

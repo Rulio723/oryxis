@@ -2451,6 +2451,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "كلمة مرور {target}",
         "zmodem_orphans_busy" => "يجري استلام تنزيل في المجلد نفسه، لذلك لم يُنقل أي شيء. تبقى الملفات المنتظرة هناك وستُعرض مجددًا عند التشغيل التالي.",
         "selection_hidden" => "{n} غير معروضة",
+        "proxy_output_title" => "رسالة الوكيل",
+        "proxy_open_link" => "فتح الرابط",
 _ => return None,
     })
 }

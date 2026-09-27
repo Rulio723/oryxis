@@ -2433,6 +2433,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "{target} のパスワード",
         "zmodem_orphans_busy" => "同じフォルダーにダウンロードを受信中のため、何も移動しませんでした。待機中のファイルはそのまま残り、次回の起動時に再度提示されます。",
         "selection_hidden" => "{n} 件は非表示",
+        "proxy_output_title" => "プロキシの出力",
+        "proxy_open_link" => "リンクを開く",
 _ => return None,
     })
 }

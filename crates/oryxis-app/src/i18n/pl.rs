@@ -2464,6 +2464,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "Hasło dla {target}",
         "zmodem_orphans_busy" => "Do tego samego folderu odbierane jest pobieranie, więc nic nie zostało przeniesione. Oczekujące pliki zostają tam i zostaną zaproponowane ponownie przy następnym uruchomieniu.",
         "selection_hidden" => "{n} niewidocznych",
+        "proxy_output_title" => "Komunikat proxy",
+        "proxy_open_link" => "Otwórz link",
 _ => return None,
     })
 }

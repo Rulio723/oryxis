@@ -2471,6 +2471,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "รหัสผ่านสำหรับ {target}",
         "zmodem_orphans_busy" => "กำลังรับไฟล์ดาวน์โหลดลงในโฟลเดอร์เดียวกัน จึงยังไม่ได้ย้ายสิ่งใด ไฟล์ที่รออยู่จะยังอยู่ที่นั่นและจะถูกเสนออีกครั้งเมื่อเปิดแอปครั้งถัดไป",
         "selection_hidden" => "{n} รายการไม่แสดง",
+        "proxy_output_title" => "ข้อความจากพร็อกซี",
+        "proxy_open_link" => "เปิดลิงก์",
 _ => return None,
     })
 }

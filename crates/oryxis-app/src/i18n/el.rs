@@ -2469,6 +2469,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "Κωδικός για {target}",
         "zmodem_orphans_busy" => "Μια λήψη παραλαμβάνεται στον ίδιο φάκελο, οπότε δεν μετακινήθηκε τίποτα. Τα αρχεία σε αναμονή παραμένουν εκεί και θα προταθούν ξανά στην επόμενη εκκίνηση.",
         "selection_hidden" => "{n} δεν εμφανίζονται",
+        "proxy_output_title" => "Μήνυμα του διακομιστή μεσολάβησης",
+        "proxy_open_link" => "Άνοιγμα συνδέσμου",
 _ => return None,
     })
 }

@@ -29,6 +29,8 @@ enum PaneConnMsg {
     Kbi(oryxis_ssh::KbiQuery),
     /// Pre-auth banner from the server (RFC 4252 §5.4).
     Banner(String),
+    /// A line a command proxy printed while the dial is pending.
+    ProxyOutput(String),
     Connected(Arc<SshSession>),
     Data(Vec<u8>),
     Disconnected,
@@ -330,6 +332,8 @@ impl Oryxis {
                     tab_idx,
                     pane_id,
                     banner: None,
+                    proxy_output: Vec::new(),
+                    dial_task: None,
                 });
                 self.active_tab = Some(tab_idx);
                 self.remember_terminal_tab_focus(tab_idx);
@@ -418,6 +422,10 @@ impl Oryxis {
                 // 4252 banners here; a bridge below surfaces them on the
                 // progress card + the tab's terminal.
                 let (banner_tx, mut banner_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<String>();
+                // A command proxy's own output while the dial is pending
+                // (issue #223): its login instructions land on the card.
+                let (proxy_out_tx, mut proxy_out_rx) =
                     tokio::sync::mpsc::unbounded_channel::<String>();
                 self.kbi_response_tx = Some(kbi_resp_tx);
 
@@ -614,6 +622,7 @@ impl Oryxis {
                             .with_terminal_type(terminal_type)
                             .with_algorithm_overrides(algo_ciphers, algo_kex, algo_macs, algo_host_keys)
                             .with_banner_sink(banner_tx)
+                            .with_proxy_output(proxy_out_tx)
                             .with_pinned_agent_key(pinned_agent.as_deref())
                         .with_auto_interactive_fallback(is_quick);
 
@@ -623,6 +632,12 @@ impl Oryxis {
                         let _banner_bridge = tokio::spawn(async move {
                             while let Some(text) = banner_rx.recv().await {
                                 let _ = banner_sender.send(SshStreamMsg::Banner(text)).await;
+                            }
+                        });
+                        let mut proxy_out_sender = sender.clone();
+                        let _proxy_out_bridge = tokio::spawn(async move {
+                            while let Some(line) = proxy_out_rx.recv().await {
+                                let _ = proxy_out_sender.send(SshStreamMsg::ProxyOutput(line)).await;
                             }
                         });
 
@@ -926,9 +941,7 @@ impl Oryxis {
                     }
                 });
 
-                return Task::batch(vec![
-                    self.tab_scroll_to_active(),
-                    Task::stream(stream).map(move |msg| match msg {
+                let (dial, dial_handle) = Task::stream(stream).map(move |msg| match msg {
                         SshStreamMsg::Progress(step, log) => {
                             Message::Ssh(SshMessage::SshProgress(pane_id, step, log))
                         }
@@ -952,6 +965,9 @@ impl Oryxis {
                             Message::Terminal(TerminalMessage::PtyOutput(pane_id, data))
                         }
                         SshStreamMsg::Banner(text) => Message::Ssh(SshMessage::SshBanner(pane_id, text)),
+                        SshStreamMsg::ProxyOutput(line) => {
+                            Message::Ssh(SshMessage::SshProxyOutput(pane_id, line))
+                        }
                         SshStreamMsg::Error(err) => Message::Ssh(SshMessage::SshError(pane_id, err)),
                         SshStreamMsg::NoCommonAlgo { category, server_offers } => {
                             Message::Ssh(SshMessage::SshNoCommonAlgo {
@@ -964,8 +980,14 @@ impl Oryxis {
                         SshStreamMsg::Disconnected => {
                             Message::Ssh(SshMessage::SshDisconnected(pane_id))
                         }
-                    }),
-                ]);
+                    }).abortable();
+                // The card owns the handle so closing it stops the dial
+                // (`abort_progress_dial`); only while it still tracks
+                // THIS pane's dial.
+                if let Some(p) = self.connecting.as_mut().filter(|p| p.pane_id == pane_id) {
+                    p.dial_task = Some(dial_handle);
+                }
+                return Task::batch(vec![self.tab_scroll_to_active(), dial]);
             }
             Err(e) => {
                 tracing::error!("Failed to create terminal state: {}", e);
@@ -1348,7 +1370,8 @@ impl Oryxis {
             PaneConnMsg::HostKey(_)
             | PaneConnMsg::ProxyCommand(_)
             | PaneConnMsg::Kbi(_)
-            | PaneConnMsg::Banner(_) => Message::NoOp,
+            | PaneConnMsg::Banner(_)
+            | PaneConnMsg::ProxyOutput(_) => Message::NoOp,
         })
     }
 
@@ -1538,6 +1561,9 @@ impl Oryxis {
         // Pre-auth banner sink (one-way); a split-pane connect has no
         // progress card, so banners go straight to the pane's terminal.
         let (banner_tx, mut banner_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        // A command proxy's output while the dial is pending (issue #223),
+        // written into the pane as dim marker lines.
+        let (proxy_out_tx, mut proxy_out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
         let stream = iced::stream::channel::<PaneConnMsg>(128, move |mut sender: iced::futures::channel::mpsc::Sender<PaneConnMsg>| async move {
             let engine = SshEngine::new()
@@ -1560,8 +1586,16 @@ impl Oryxis {
                 .with_terminal_type(terminal_type)
                 .with_algorithm_overrides(algo_ciphers, algo_kex, algo_macs, algo_host_keys)
                 .with_banner_sink(banner_tx)
+                .with_proxy_output(proxy_out_tx)
                 .with_pinned_agent_key(pinned_agent.as_deref())
                 .with_auto_interactive_fallback(is_quick);
+
+            let mut proxy_out_sender = sender.clone();
+            let _proxy_out_bridge = tokio::spawn(async move {
+                while let Some(line) = proxy_out_rx.recv().await {
+                    let _ = proxy_out_sender.send(PaneConnMsg::ProxyOutput(line)).await;
+                }
+            });
 
             let mut sender_clone = sender.clone();
             let _bridge = tokio::spawn(async move {
@@ -1634,6 +1668,9 @@ impl Oryxis {
             )),
             PaneConnMsg::Kbi(q) => Message::Ssh(SshMessage::SshKbiPrompt(quick_id, q)),
             PaneConnMsg::Banner(text) => Message::Ssh(SshMessage::SshPaneBanner(pane_id, text)),
+            PaneConnMsg::ProxyOutput(line) => {
+                Message::Ssh(SshMessage::SshPaneProxyOutput(pane_id, line))
+            }
             PaneConnMsg::Connected(s) => {
                 Message::Ssh(SshMessage::SshConnected(pane_id, crate::state::TerminalTransport::Ssh(s)))
             }

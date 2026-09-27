@@ -2469,6 +2469,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "Heslo pro {target}",
         "zmodem_orphans_busy" => "Do stejné složky se právě přijímá stahování, proto se nic nepřesunulo. Čekající soubory tam zůstávají a budou znovu nabídnuty při příštím spuštění.",
         "selection_hidden" => "{n} nezobrazeno",
+        "proxy_output_title" => "Zpráva proxy",
+        "proxy_open_link" => "Otevřít odkaz",
 _ => return None,
     })
 }

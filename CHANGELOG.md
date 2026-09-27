@@ -4,6 +4,12 @@ All notable changes to Oryxis are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- A command proxy that logs in first (an expired SSO session, a browser URL) no longer fails the dial; its output shows on the connect card (#223, reported by @guptakanishka90).
+- A host-key or command-proxy prompt no longer times the connection out while you read it; closing the connect card stops the dial and its proxy.
+
 ## [0.19.0] - 2026-09-27
 
 Hosts move between folders by menu, selection bar or drag, and a multi-select mode connects, moves or removes them in batches. Alibaba Cloud and Tencent Cloud join the cloud accounts, the relay installs itself on one of your hosts, restored tabs can reconnect at launch, and MCP reaches hosts behind jump hosts.

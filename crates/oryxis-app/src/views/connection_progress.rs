@@ -290,6 +290,62 @@ impl Oryxis {
             None => Space::new().into(),
         };
 
+        // What a command proxy said while this dial was pending (issue
+        // #223): login instructions, a browser URL, "credentials expired,
+        // refreshing". The proxy is a LOCAL process the user approved, so
+        // a URL it prints is offered as a button, and opens only on a
+        // click, never by itself. Built here, right after the banner, so
+        // its link rows are recorded in display order.
+        let proxy_block: Element<'_, Message> = if progress.proxy_output.is_empty() {
+            Space::new().into()
+        } else {
+            let body = self.redact_progress(progress, &progress.proxy_output.join("\n"));
+            let box_h = (body.lines().count() as f32 * 17.0 + 22.0).min(140.0);
+            let mut links: Vec<Element<'_, Message>> = Vec::new();
+            for url in proxy_output_urls(&progress.proxy_output) {
+                let msg = Message::OpenUrl(url);
+                let btn = crate::widgets::styled_button_owned(
+                    crate::i18n::t("proxy_open_link").to_string(),
+                    Some(msg.clone()),
+                    OryxisColors::t().accent,
+                );
+                links.push(self.progress_slot(owned, msg, 8.0, true, btn));
+            }
+            let mut col = column![
+                Space::new().height(10),
+                text(crate::i18n::t("proxy_output_title"))
+                    .size(11)
+                    .color(OryxisColors::t().text_muted),
+                Space::new().height(4),
+                container(
+                    iced::widget::scrollable(
+                        text(body)
+                            .size(12)
+                            .font(iced::Font::MONOSPACE)
+                            .color(OryxisColors::t().text_secondary),
+                    )
+                    .width(Length::Fill),
+                )
+                .height(Length::Fixed(box_h))
+                .width(Length::Fill)
+                .padding(10)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(OryxisColors::t().bg_surface)),
+                    border: Border {
+                        radius: Radius::from(8.0),
+                        color: OryxisColors::t().border,
+                        width: 1.0,
+                    },
+                    ..Default::default()
+                }),
+            ];
+            if !links.is_empty() {
+                col = col.push(Space::new().height(8));
+                col = col.push(crate::widgets::dir_row(links).spacing(8));
+            }
+            col.into()
+        };
+
         // Pulse for the in-flight timeline node while still connecting.
         // Triangular wave 0 -> 1 -> 0 over ~800 ms, driven by the 100 ms
         // connect_anim_tick subscription (only alive while connecting).
@@ -672,6 +728,7 @@ impl Oryxis {
                 header,
                 status_widget,
                 banner_block,
+                proxy_block,
                 Space::new().height(12),
                 body_widget,
                 Space::new().height(16),
@@ -1090,5 +1147,48 @@ impl Oryxis {
                 .into(),
             None => buttons.into(),
         }
+    }
+}
+
+/// The web links a command proxy printed, in order, each once, at most
+/// three (a login prints one; a card of buttons would bury the card).
+/// Trailing punctuation that is almost always sentence, not URL, is
+/// trimmed.
+fn proxy_output_urls(lines: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in lines {
+        for word in line.split_whitespace() {
+            let start = word.find("https://").or_else(|| word.find("http://"));
+            let Some(start) = start else { continue };
+            let url = word[start..].trim_end_matches(['.', ',', ';', ':', ')', ']', '>', '"', '\'']);
+            if url.len() > "https://".len() && !out.iter().any(|u| u == url) {
+                out.push(url.to_string());
+                if out.len() == 3 {
+                    return out;
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod proxy_output_tests {
+    use super::proxy_output_urls;
+
+    #[test]
+    fn the_login_url_a_proxy_prints_is_found_once() {
+        let lines = vec![
+            "WARN Expired SSH credentials found. Will refresh...".to_string(),
+            "Open https://sso.example/device?code=AB-12 in a browser.".to_string(),
+            "(or visit <https://sso.example/device?code=AB-12>)".to_string(),
+        ];
+        assert_eq!(proxy_output_urls(&lines), vec!["https://sso.example/device?code=AB-12"]);
+    }
+
+    #[test]
+    fn a_line_without_a_link_offers_none() {
+        assert!(proxy_output_urls(&["token refreshed, connecting".to_string()]).is_empty());
+        assert!(proxy_output_urls(&["see https://".to_string()]).is_empty());
     }
 }

@@ -33,6 +33,12 @@ pub enum SshMessage {
     /// Pre-auth banner for a split-pane connect (no progress card):
     /// written straight to that pane's terminal.
     SshPaneBanner(Uuid, String),
+    /// A line a command proxy printed while the tab dial of `pane_id` is
+    /// pending: shown on the progress card tracking that dial.
+    SshProxyOutput(Uuid, String),
+    /// The same for a split-pane / in-place dial (no card): written into
+    /// the pane as a dim marker line.
+    SshPaneProxyOutput(Uuid, String),
     SshConnected(Uuid, crate::state::TerminalTransport),  // (pane_id, transport)
     /// Opening a session on a pooled connection failed (F2 reuse), so
     /// the pane dials for real: `(pane_id)`. The tab index is

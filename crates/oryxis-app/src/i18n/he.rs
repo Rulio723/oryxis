@@ -2470,6 +2470,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "סיסמה עבור {target}",
         "zmodem_orphans_busy" => "הורדה מתקבלת כעת לאותה תיקייה, ולכן שום דבר לא הועבר. הקבצים הממתינים נשארים שם ויוצעו שוב בהפעלה הבאה.",
         "selection_hidden" => "{n} לא מוצגים",
+        "proxy_output_title" => "הודעת הפרוקסי",
+        "proxy_open_link" => "פתיחת הקישור",
 _ => return None,
     })
 }

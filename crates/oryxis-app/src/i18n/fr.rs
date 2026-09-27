@@ -2431,6 +2431,8 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "password_suggest_title_for" => "Mot de passe de {target}",
         "zmodem_orphans_busy" => "Un téléchargement est en cours de réception dans le même dossier, rien n'a donc été déplacé. Les fichiers en attente y restent et seront proposés à nouveau au prochain lancement.",
         "selection_hidden" => "{n} non affichés",
+        "proxy_output_title" => "Le proxy indique",
+        "proxy_open_link" => "Ouvrir le lien",
 _ => return None,
     })
 }

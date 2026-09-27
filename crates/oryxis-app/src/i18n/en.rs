@@ -2473,6 +2473,8 @@ pub(super) fn lookup(key: &str) -> &'static str {
         "password_suggest_title_for" => "Password for {target}",
         "zmodem_orphans_busy" => "A download is being received into the same folder, so nothing was moved. The waiting files stay there and are offered again at the next launch.",
         "selection_hidden" => "{n} not shown",
+        "proxy_output_title" => "The proxy says",
+        "proxy_open_link" => "Open link",
         _ => "???",
     }
 }
