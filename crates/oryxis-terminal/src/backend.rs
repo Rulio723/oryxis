@@ -221,7 +221,18 @@ pub struct TerminalBackend {
     /// Bounded for the same reason `marks` is: an undrained pane must not
     /// grow without limit.
     hits: std::collections::VecDeque<crate::trigger::TriggerHit>,
+    /// Since when the alternate screen has had its cursor hidden at the
+    /// end of a batch, `None` while it is not. What bounds
+    /// [`Self::alt_screen_redraw_in_progress`]: a multiplexer's repaint
+    /// shows the cursor again within milliseconds, a program that hides
+    /// it for good (htop, a pager) does not.
+    alt_hidden_since: Option<std::time::Instant>,
 }
+
+/// How long a hidden cursor on the alternate screen may still read as a
+/// repaint in progress. Far above any multiplexer redraw (they finish
+/// in one write), far below what a user notices a stale popup for.
+const ALT_REDRAW_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// How many undrained trigger hits a backend holds. The app drains after
 /// every output batch, so reaching this means nothing is listening.
@@ -269,6 +280,7 @@ impl TerminalBackend {
             trigger: crate::trigger::TriggerScanner::default(),
             rules: std::sync::Arc::default(),
             hits: std::collections::VecDeque::new(),
+            alt_hidden_since: None,
         }
     }
 
@@ -400,6 +412,14 @@ impl TerminalBackend {
         if result.is_err() {
             tracing::error!("Terminal processor panic on {} bytes (ignored)", bytes.len());
         }
+        let mode = self.term.mode();
+        let hidden = mode.contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
+            && !mode.contains(alacritty_terminal::term::TermMode::SHOW_CURSOR);
+        self.alt_hidden_since = match (hidden, self.alt_hidden_since) {
+            (false, _) => None,
+            (true, Some(since)) => Some(since),
+            (true, None) => Some(std::time::Instant::now()),
+        };
     }
 
     /// Drain the OSC 133 marks captured since the last call.
@@ -456,14 +476,23 @@ impl TerminalBackend {
         let cursor_col = point.column.0.min(cols);
 
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            let rows = grid.screen_lines() as i32;
             let row = &grid[Line(cursor_line)];
+            let divider_at = |c: usize| divider_column(grid, cursor_line, rows, c);
             // The pane starts after the last divider left of the cursor.
             // Cutting too eagerly only shortens the segment, and a short
             // segment fails the strict match: the safe direction.
-            let start = (0..cursor_col)
-                .rev()
-                .find(|&c| is_pane_divider(&row[Column(c)]))
-                .map_or(0, |c| c + 1);
+            let start = (0..cursor_col).rev().find(|&c| divider_at(c)).map_or(0, |c| c + 1);
+            // And ends at the first one right of it.
+            let end = (cursor_col..cols).find(|&c| divider_at(c)).unwrap_or(cols);
+            // A program blocked on a password has printed its prompt
+            // LAST: nothing follows the cursor on its row, and the pane
+            // below it is empty down to its bottom edge. An editor with
+            // the cursor after a `Password:` line of a file has the
+            // rest of the file, or its `~` filler, underneath.
+            if !pane_blank_below(grid, cursor_line, rows, cursor_col, start, end) {
+                return None;
+            }
             let mut text = String::new();
             for c in start..cursor_col {
                 let cell = &row[Column(c)];
@@ -529,10 +558,15 @@ impl TerminalBackend {
     /// the next batch. The primary screen is left out on purpose: a
     /// program that hides the cursor there is not repainting a screen
     /// it owns.
+    ///
+    /// Bounded by [`ALT_REDRAW_WINDOW`]: a cursor still hidden after that
+    /// is not a repaint but a program that runs without one (htop, a
+    /// pager, the pane a click in tmux just switched to), and the batch
+    /// is read again, so a popup left over from a prompt that is no
+    /// longer on screen is dismissed instead of floating over it.
     pub fn alt_screen_redraw_in_progress(&self) -> bool {
-        use alacritty_terminal::term::TermMode;
-        let mode = self.term.mode();
-        mode.contains(TermMode::ALT_SCREEN) && !mode.contains(TermMode::SHOW_CURSOR)
+        self.alt_hidden_since
+            .is_some_and(|since| since.elapsed() < ALT_REDRAW_WINDOW)
     }
 
     /// Deadline at which an open synchronized update (DEC `?2026`) must be
@@ -576,6 +610,68 @@ impl TerminalBackend {
     pub fn rows(&self) -> u16 {
         self.rows
     }
+}
+
+/// Whether column `col` of row `line` is a pane divider: the cell is
+/// divider-shaped AND the row above or below carries one in the same
+/// column. A multiplexer draws its divider as a rule down the whole
+/// pane, so a lone `|` in text (a markdown table, a shell pipe) is not
+/// one. A one-row screen has no neighbour to ask and takes the cell.
+fn divider_column(
+    grid: &alacritty_terminal::grid::Grid<alacritty_terminal::term::cell::Cell>,
+    line: i32,
+    rows: i32,
+    col: usize,
+) -> bool {
+    use alacritty_terminal::index::{Column, Line};
+    if !is_pane_divider(&grid[Line(line)][Column(col)]) {
+        return false;
+    }
+    if rows <= 1 {
+        return true;
+    }
+    [line - 1, line + 1]
+        .into_iter()
+        .filter(|l| (0..rows).contains(l))
+        .any(|l| is_pane_divider(&grid[Line(l)][Column(col)]))
+}
+
+/// Whether the pane spanning columns `start..end` is empty after the
+/// cursor: the rest of the cursor's row, and every row below it down to
+/// the pane's bottom edge. The edge is a row that opens with a
+/// horizontal rule or reverse video in the pane's first column (a tmux
+/// border, a screen caption), or the screen's LAST row, which is
+/// skipped as a status line (tmux's, screen's hardstatus, an editor's
+/// command line). A pane whose prompt sits on its bottom row has nothing
+/// below to read and passes, which is the one case this cannot tell
+/// from an editor scrolled to the same place.
+fn pane_blank_below(
+    grid: &alacritty_terminal::grid::Grid<alacritty_terminal::term::cell::Cell>,
+    cursor_line: i32,
+    rows: i32,
+    cursor_col: usize,
+    start: usize,
+    end: usize,
+) -> bool {
+    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::term::cell::Flags;
+    let blank = |line: i32, from: usize| {
+        let row = &grid[Line(line)];
+        (from..end).all(|c| matches!(row[Column(c)].c, ' ' | '\0'))
+    };
+    if !blank(cursor_line, cursor_col) {
+        return false;
+    }
+    for line in cursor_line + 1..rows - 1 {
+        let first = &grid[Line(line)][Column(start)];
+        if matches!(first.c, '\u{2500}'..='\u{257F}') || first.flags.contains(Flags::INVERSE) {
+            break;
+        }
+        if !blank(line, start) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Whether `cell` is the divider a terminal multiplexer draws between two
@@ -1006,6 +1102,56 @@ mod tests {
         assert!(backend.alt_screen_redraw_in_progress(), "the batch knows nothing");
         backend.process(b"\x1b[?25h\x1b[1;80H");
         assert!(!backend.alt_screen_redraw_in_progress());
+        assert!(backend.password_prompt_at_cursor().is_some());
+    }
+
+    #[test]
+    fn a_cursor_hidden_for_good_stops_gating_the_read() {
+        let mut backend = TerminalBackend::new(100, 24);
+        backend.process(&tmux_split_with_prompt_on_the_right("left"));
+        // A click in tmux moves to a pane running htop: cursor hidden,
+        // and it stays hidden.
+        backend.process(b"\x1b[?25l\x1b[5;10H  PID USER");
+        assert!(backend.alt_screen_redraw_in_progress());
+        backend.alt_hidden_since =
+            Some(std::time::Instant::now() - ALT_REDRAW_WINDOW - std::time::Duration::from_millis(1));
+        backend.process(b"\x1b[6;10H  123 root");
+        assert!(
+            !backend.alt_screen_redraw_in_progress(),
+            "a cursor hidden past the window is a program, not a repaint"
+        );
+        assert!(backend.password_prompt_at_cursor().is_none());
+    }
+
+    #[test]
+    fn an_editor_line_reading_password_is_not_a_prompt() {
+        // vim, no line numbers, insert mode, cursor after `Password:` on
+        // the first line of a notes file: the filler below gives it away.
+        let mut backend = TerminalBackend::new(80, 6);
+        backend.process(b"\x1b[?1049h\x1b[H\x1b[2J");
+        backend.process(b"\x1b[2;1H~\x1b[3;1H~\x1b[4;1H~\x1b[5;1H~\x1b[6;1H-- INSERT --");
+        backend.process(b"\x1b[1;1HPassword:");
+        assert!(backend.password_prompt_at_cursor().is_none());
+        // Text after the cursor on the row is not a waiting prompt either.
+        let mut backend = TerminalBackend::new(80, 6);
+        backend.process(b"\x1b[?1049h\x1b[H\x1b[2JPassword: hunter2\x1b[1;11H");
+        assert!(backend.password_prompt_at_cursor().is_none());
+    }
+
+    #[test]
+    fn a_lone_pipe_is_not_a_pane_divider() {
+        // `|Password:` in a markdown table: one `|` on one row, no rule
+        // down the screen, so the segment is the whole row and fails.
+        let mut backend = TerminalBackend::new(80, 6);
+        backend.process(b"\x1b[?1049h\x1b[H\x1b[2J|Password:");
+        assert!(backend.password_prompt_at_cursor().is_none());
+        // The same `|` drawn down every row is tmux's `simple` border.
+        let mut backend = TerminalBackend::new(80, 6);
+        backend.process(b"\x1b[?1049h\x1b[H\x1b[2J");
+        for row in 1..=5 {
+            backend.process(format!("\x1b[{row};20H|").as_bytes());
+        }
+        backend.process(b"\x1b[1;21HPassword: ");
         assert!(backend.password_prompt_at_cursor().is_some());
     }
 

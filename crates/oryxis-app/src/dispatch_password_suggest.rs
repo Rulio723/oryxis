@@ -66,17 +66,113 @@ pub(crate) fn observe_password_prompt(
     }
 }
 
-impl Oryxis {
-    /// Credentials worth offering for a prompt on `pane_id`, most
-    /// likely first: the pane's own host, then the identity that host
-    /// authenticates with, then every other identity that has a
-    /// password. Empty when there is nothing to offer, which is what
-    /// keeps the popup from ever opening on an empty list.
-    fn password_suggest_sources(&self, pane_id: uuid::Uuid) -> Vec<PasswordSource> {
-        let mut out: Vec<PasswordSource> = Vec::new();
-        let mut seen_identity: std::collections::HashSet<uuid::Uuid> =
-            std::collections::HashSet::new();
+/// The credentials to offer, most likely first.
+///
+/// Ordinarily: the pane's own host, then the identity that host
+/// authenticates with (on a host that logs in through an identity, that
+/// is the account `sudo` is asking about), then every other identity
+/// with a password, by label.
+///
+/// A prompt that names ANOTHER machine (`target`: an `ssh b` or a git
+/// push run inside the session on `a`, the ordinary case inside tmux)
+/// is not asking for the pane host's password, and ranking that first
+/// would put it one Enter away from a host that did not earn it. Then
+/// the named host's own rows lead, identities follow (the named account
+/// first), and the pane's host goes last.
+pub(crate) fn rank_password_sources(
+    conn: Option<&oryxis_core::models::Connection>,
+    target: Option<&oryxis_terminal::prompt_detect::PromptTarget>,
+    connections: &[oryxis_core::models::Connection],
+    identities: &[oryxis_core::models::Identity],
+    with_password: &std::collections::HashSet<uuid::Uuid>,
+    identities_with_password: &std::collections::HashSet<uuid::Uuid>,
+) -> Vec<PasswordSource> {
+    let conn_source = |c: &oryxis_core::models::Connection| PasswordSource {
+        label: c.label.clone(),
+        sublabel: c.username.clone().unwrap_or_default(),
+        kind: PasswordSourceKind::Connection(c.id),
+    };
+    let ident_source = |i: &oryxis_core::models::Identity| PasswordSource {
+        label: i.label.clone(),
+        sublabel: i.username.clone().unwrap_or_default(),
+        kind: PasswordSourceKind::Identity(i.id),
+    };
+    let mut out: Vec<PasswordSource> = Vec::new();
 
+    let foreign = target.filter(|t| conn.is_none_or(|c| !names_host(c, &t.host)));
+    if let Some(target) = foreign {
+        let not_named_user = |user: &Option<String>| target.user.is_some() && *user != target.user;
+        let mut named: Vec<&oryxis_core::models::Connection> = connections
+            .iter()
+            .filter(|c| names_host(c, &target.host) && with_password.contains(&c.id))
+            .collect();
+        named.sort_by_key(|c| (not_named_user(&c.username), c.label.to_lowercase()));
+        out.extend(named.into_iter().map(conn_source));
+        let mut idents: Vec<&oryxis_core::models::Identity> = identities
+            .iter()
+            .filter(|i| identities_with_password.contains(&i.id))
+            .collect();
+        idents.sort_by_key(|i| (not_named_user(&i.username), i.label.to_lowercase()));
+        out.extend(idents.into_iter().map(ident_source));
+        if let Some(conn) = conn
+            && with_password.contains(&conn.id)
+        {
+            out.push(conn_source(conn));
+        }
+        return out;
+    }
+
+    let mut seen_identity = std::collections::HashSet::new();
+    if let Some(conn) = conn {
+        if with_password.contains(&conn.id) {
+            out.push(conn_source(conn));
+        }
+        if let Some(id) = conn.identity_id
+            && identities_with_password.contains(&id)
+            && let Some(ident) = identities.iter().find(|i| i.id == id)
+        {
+            seen_identity.insert(id);
+            out.push(ident_source(ident));
+        }
+    }
+    let mut rest: Vec<&oryxis_core::models::Identity> = identities
+        .iter()
+        .filter(|i| identities_with_password.contains(&i.id) && !seen_identity.contains(&i.id))
+        .collect();
+    rest.sort_by_key(|i| i.label.to_lowercase());
+    out.extend(rest.into_iter().map(ident_source));
+    out
+}
+
+/// What the popup's title should name, when the prompt asks for a
+/// machine other than the pane's own host: `user@host` as the prompt
+/// printed it, or just the host. `None` for the pane's own prompt,
+/// which the ordinary title already describes.
+pub(crate) fn foreign_prompt_label(
+    conn: Option<&oryxis_core::models::Connection>,
+    target: Option<&oryxis_terminal::prompt_detect::PromptTarget>,
+) -> Option<String> {
+    let target = target.filter(|t| conn.is_none_or(|c| !names_host(c, &t.host)))?;
+    Some(match &target.user {
+        Some(user) => format!("{user}@{}", target.host),
+        None => target.host.clone(),
+    })
+}
+
+/// Whether `host`, as a prompt printed it, is `conn`: its address or
+/// the label a `ssh` alias would carry. Case-insensitive, like DNS.
+fn names_host(conn: &oryxis_core::models::Connection, host: &str) -> bool {
+    conn.hostname.eq_ignore_ascii_case(host) || conn.label.eq_ignore_ascii_case(host)
+}
+
+impl Oryxis {
+    /// Credentials worth offering for a prompt on `pane_id`, ranked by
+    /// [`rank_password_sources`]. Empty when there is nothing to offer,
+    /// which is what keeps the popup from ever opening on an empty list.
+    fn password_suggest_sources(
+        &self,
+        pane_id: uuid::Uuid,
+    ) -> (Vec<PasswordSource>, Option<String>) {
         // Which rows HAVE a password is asked of the vault here, once
         // per popup, rather than read from a boot-time cache. A password
         // can be written by paths that never refresh one (a sync apply,
@@ -86,7 +182,7 @@ impl Oryxis {
         // offered. Both queries are existence checks (no decrypt, no
         // unlock), and once per prompt is not a hot path.
         let Some(vault) = self.vault.as_ref() else {
-            return out;
+            return (Vec::new(), None);
         };
         let with_password = vault.list_connection_ids_with_password().unwrap_or_default();
         let identities_with_password =
@@ -94,49 +190,25 @@ impl Oryxis {
 
         // The pane's host. Quick-connect hosts live in an in-memory
         // store with no vault row, so only saved hosts qualify.
-        let conn = self.pane_by_id(pane_id).and_then(|p| match &p.origin {
+        let pane = self.pane_by_id(pane_id);
+        let conn = pane.and_then(|p| match &p.origin {
             crate::state::PaneOrigin::Host(id) => {
                 self.connections.iter().find(|c| c.id == *id)
             }
             _ => None,
         });
-        if let Some(conn) = conn {
-            if with_password.contains(&conn.id) {
-                out.push(PasswordSource {
-                    label: conn.label.clone(),
-                    sublabel: conn.username.clone().unwrap_or_default(),
-                    kind: PasswordSourceKind::Connection(conn.id),
-                });
-            }
-            // The identity this host authenticates with outranks the
-            // rest: on a host that logs in through an identity, that is
-            // the account `sudo` is asking about.
-            if let Some(id) = conn.identity_id
-                && identities_with_password.contains(&id)
-                && let Some(ident) = self.identities.iter().find(|i| i.id == id)
-            {
-                seen_identity.insert(id);
-                out.push(PasswordSource {
-                    label: ident.label.clone(),
-                    sublabel: ident.username.clone().unwrap_or_default(),
-                    kind: PasswordSourceKind::Identity(id),
-                });
-            }
-        }
-        let mut rest: Vec<&oryxis_core::models::Identity> = self
-            .identities
-            .iter()
-            .filter(|i| {
-                identities_with_password.contains(&i.id) && !seen_identity.contains(&i.id)
-            })
-            .collect();
-        rest.sort_by_key(|i| i.label.to_lowercase());
-        out.extend(rest.into_iter().map(|i| PasswordSource {
-            label: i.label.clone(),
-            sublabel: i.username.clone().unwrap_or_default(),
-            kind: PasswordSourceKind::Identity(i.id),
-        }));
-        out
+        let target = pane
+            .and_then(|p| p.password_prompt_sig.as_ref())
+            .and_then(|(text, _)| oryxis_terminal::prompt_detect::prompt_target(text));
+        let entries = rank_password_sources(
+            conn,
+            target.as_ref(),
+            &self.connections,
+            &self.identities,
+            &with_password,
+            &identities_with_password,
+        );
+        (entries, foreign_prompt_label(conn, target.as_ref()))
     }
 
     /// The pane a password prompt may raise a popup on right now, or
@@ -196,7 +268,7 @@ impl Oryxis {
     /// distinction a prompt that arrived one frame too early would be
     /// silently skipped for good.
     pub(crate) fn show_password_suggest(&mut self, pane_id: uuid::Uuid) {
-        let entries = self.password_suggest_sources(pane_id);
+        let (entries, prompt_for) = self.password_suggest_sources(pane_id);
         if entries.is_empty() {
             return;
         }
@@ -213,6 +285,7 @@ impl Oryxis {
                 selected: None,
                 caret_top,
                 scroll: 0.0,
+                prompt_for,
             },
             x,
             y,
@@ -493,6 +566,60 @@ mod tests {
         })
     }
 
+    fn ranked_labels(
+        pane_host: usize,
+        prompt: &str,
+        conns: &[oryxis_core::models::Connection],
+        idents: &[oryxis_core::models::Identity],
+    ) -> Vec<String> {
+        let with: std::collections::HashSet<uuid::Uuid> = conns.iter().map(|c| c.id).collect();
+        let iwith: std::collections::HashSet<uuid::Uuid> = idents.iter().map(|i| i.id).collect();
+        let target = oryxis_terminal::prompt_detect::prompt_target(prompt);
+        rank_password_sources(Some(&conns[pane_host]), target.as_ref(), conns, idents, &with, &iwith)
+            .into_iter()
+            .map(|s| s.label)
+            .collect()
+    }
+
+    #[test]
+    fn a_prompt_naming_another_host_does_not_lead_with_the_pane_host() {
+        use oryxis_core::models::{Connection, Identity};
+        let a = Connection::new("alpha", "10.0.0.1");
+        let mut b = Connection::new("bravo", "10.0.0.2");
+        b.username = Some("deploy".into());
+        let mut ops = Identity::new("ops");
+        ops.username = Some("deploy".into());
+        let admin = Identity::new("admin");
+        let conns = vec![a, b];
+        let idents = vec![admin, ops];
+
+        // `ssh deploy@10.0.0.2` run inside the session on alpha.
+        assert_eq!(
+            ranked_labels(0, "deploy@10.0.0.2's password:", &conns, &idents),
+            ["bravo", "ops", "admin", "alpha"]
+        );
+        // A host the vault does not know: identities first, pane last.
+        assert_eq!(
+            ranked_labels(0, "(root@elsewhere) Password:", &conns, &idents),
+            ["admin", "ops", "alpha"]
+        );
+        // The prompt names the pane's own host (by address or by label):
+        // the ordinary ranking.
+        assert_eq!(
+            ranked_labels(0, "root@10.0.0.1's password:", &conns, &idents),
+            ["alpha", "admin", "ops"]
+        );
+        assert_eq!(
+            ranked_labels(0, "root@ALPHA's password:", &conns, &idents),
+            ["alpha", "admin", "ops"]
+        );
+        // A local prompt keeps the pane's host first.
+        assert_eq!(
+            ranked_labels(0, "[sudo] password for wilson:", &conns, &idents),
+            ["alpha", "admin", "ops"]
+        );
+    }
+
     #[test]
     fn a_prompt_that_stays_on_screen_is_offered_once() {
         // The failure this guards: grid reading is stateless, so every
@@ -542,5 +669,22 @@ mod tests {
         assert!(!observe_password_prompt(&mut sig, None));
         assert_eq!(sig, None);
         assert!(observe_password_prompt(&mut sig, prompt("Password:", 4)));
+    }
+
+    #[test]
+    fn the_title_names_only_a_foreign_target() {
+        use oryxis_core::models::Connection;
+        let web = Connection::new("web", "web.example");
+        let target = |p: &str| oryxis_terminal::prompt_detect::prompt_target(p);
+        // The pane's own host (by address or by label) keeps the plain title.
+        assert_eq!(foreign_prompt_label(Some(&web), target("bob@web.example's password:").as_ref()), None);
+        assert_eq!(foreign_prompt_label(Some(&web), target("bob@WEB's password:").as_ref()), None);
+        // Another machine is named as the prompt printed it.
+        assert_eq!(
+            foreign_prompt_label(Some(&web), target("bob@db's password:").as_ref()),
+            Some("bob@db".to_string())
+        );
+        // A local `sudo` names nobody.
+        assert_eq!(foreign_prompt_label(Some(&web), target("[sudo] password for bob:").as_ref()), None);
     }
 }

@@ -100,8 +100,15 @@ pub fn looks_like_password_prompt(line: &str) -> bool {
 /// Case-sensitive and anchored at both ends on purpose. The alternate
 /// screen belongs to whoever drew it, and besides a multiplexer that is
 /// an editor: vim in insert mode, cursor after a YAML `password:` key,
-/// passes the loose rules. What tells the two apart is the shape of the
-/// whole segment: su says `Password:`, never an indented lower-case key.
+/// passes the loose rules. The shape of the whole segment settles the
+/// common case (su says `Password:`, never an indented lower-case key),
+/// but NOT all of it: a file line reading exactly `Password:` in column
+/// 0 fits the shape. What refuses that one is the screen around it,
+/// checked by the reader in `backend` (the rest of the row and the pane
+/// below the cursor must be empty, and a divider must run down the
+/// rows, not sit on one), and what is left after both is an editor
+/// scrolled so that line is the pane's last, which only a pick can
+/// turn into a keystroke.
 ///
 /// Sources, one per alternative: sudo, sudo-rs (Ubuntu's default since
 /// 25.10), doas, su / login / PAM modules that name themselves (`LDAP
@@ -128,9 +135,66 @@ pub fn looks_like_multiplexed_password_prompt(segment: &str) -> bool {
     MULTIPLEXED_SHAPES.is_match(trimmed) && looks_like_password_prompt(trimmed)
 }
 
+/// The remote account a prompt names, when it names one that is NOT the
+/// machine the prompt is printed on.
+///
+/// Only ssh's two shapes and git's credential prompt qualify: those ask
+/// for the password of the host they name, which on a multiplexed pane
+/// is routinely not the pane's own (an `ssh b` run inside tmux on `a`).
+/// `sudo` and `doas` name a LOCAL account (doas prints the local
+/// hostname), so they answer `None` and keep the pane's own ranking.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptTarget {
+    pub user: Option<String>,
+    pub host: String,
+}
+
+static TARGET_SHAPES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        r"^(?:(?P<u1>[^\s@()']+)@(?P<h1>[^\s@()']+)'s password:|\((?P<u2>[^\s@()]+)@(?P<h2>[^\s@()]+)\) Password:|Password for '[a-z][a-z0-9+.-]*://(?:(?P<u3>[^\s@/':]+)@)?(?P<h3>[^\s@/':]+)[^']*':)$",
+    )
+    .expect("static pattern")
+});
+
+/// [`PromptTarget`] for `prompt` (as printed, trailing space trimmed).
+pub fn prompt_target(prompt: &str) -> Option<PromptTarget> {
+    let caps = TARGET_SHAPES.captures(prompt.trim_end())?;
+    let host = ["h1", "h2", "h3"].iter().find_map(|n| caps.name(n))?.as_str();
+    // IPv6 in brackets reads the same as the host field it was typed in.
+    let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
+    let user = ["u1", "u2", "u3"]
+        .iter()
+        .find_map(|n| caps.name(n))
+        .map(|m| m.as_str().to_string());
+    Some(PromptTarget { user, host })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompts_that_name_a_remote_account_say_which() {
+        let t = |user: Option<&str>, host: &str| {
+            Some(PromptTarget { user: user.map(str::to_string), host: host.to_string() })
+        };
+        assert_eq!(prompt_target("wilson@10.0.0.5's password: "), t(Some("wilson"), "10.0.0.5"));
+        assert_eq!(prompt_target("(deploy@db.internal) Password:"), t(Some("deploy"), "db.internal"));
+        assert_eq!(
+            prompt_target("Password for 'https://wilson@github.com': "),
+            t(Some("wilson"), "github.com")
+        );
+        assert_eq!(
+            prompt_target("Password for 'https://git.example.com/org/repo.git':"),
+            t(None, "git.example.com")
+        );
+        // Local accounts: the pane's own machine is asking.
+        assert_eq!(prompt_target("[sudo] password for wilson:"), None);
+        assert_eq!(prompt_target("doas (wilson@host) password:"), None);
+        assert_eq!(prompt_target("Password:"), None);
+        // `root's password:` names no host.
+        assert_eq!(prompt_target("root's password:"), None);
+    }
 
     #[test]
     fn real_prompts_match() {

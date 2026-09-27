@@ -132,6 +132,18 @@ pub(crate) fn password_suggest_layout(entries: &[PasswordSource], window_h: f32)
     }
 }
 
+/// Longest target the title prints before eliding: the popup is a
+/// fixed 260 px, and the title is measured as one line.
+const TARGET_MAX_CHARS: usize = 32;
+
+fn elide_target(target: &str) -> String {
+    if target.chars().count() <= TARGET_MAX_CHARS {
+        return target.to_string();
+    }
+    let head: String = target.chars().take(TARGET_MAX_CHARS - 1).collect();
+    format!("{head}\u{2026}")
+}
+
 impl Oryxis {
     /// Borrows nothing: every label is cloned into an owned widget, so
     /// the returned element outlives both `self` and the overlay it was
@@ -140,10 +152,20 @@ impl Oryxis {
         &self,
         entries: &[crate::state::PasswordSource],
         selected: Option<usize>,
+        prompt_for: Option<&str>,
     ) -> Element<'static, Message> {
+        // A prompt naming another machine says so in the title, on the
+        // one line the layout measures (no wrap, long names elided), so
+        // the height the box is placed by stays the height it draws.
+        let title_text = match prompt_for {
+            Some(target) => crate::i18n::t("password_suggest_title_for")
+                .replace("{target}", &elide_target(target)),
+            None => crate::i18n::t("password_suggest_title").to_string(),
+        };
         let title = container(
-            text(crate::i18n::t("password_suggest_title"))
+            text(title_text)
                 .size(TITLE_SIZE)
+                .wrapping(iced::widget::text::Wrapping::None)
                 .color(OryxisColors::t().text_muted),
         )
         .padding(TITLE_PAD)

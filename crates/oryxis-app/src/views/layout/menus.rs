@@ -420,8 +420,11 @@ impl Oryxis {
             }
             OverlayContent::MonitorPortActions(port) => self.build_menu_monitor_port(port),
             OverlayContent::PasswordSuggest {
-                entries, selected, ..
-            } => self.build_menu_password_suggest(entries, *selected),
+                entries,
+                selected,
+                prompt_for,
+                ..
+            } => self.build_menu_password_suggest(entries, *selected, prompt_for.as_deref()),
         };
 
         // Min-height (so a single-item menu reads as a real button-
