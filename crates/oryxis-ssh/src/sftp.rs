@@ -2201,28 +2201,44 @@ impl SftpClient {
         // of the guard once granted, and holding it for the whole run
         // would stall every other channel open on this connection behind
         // one slow command.
+        // The OPEN and the exec REQUEST are two bounded steps, not one
+        // future, so a deadline that lands between them still has the
+        // granted channel in hand to close: dropped inside a timed-out
+        // future it would stay open on the server until the connection
+        // went. A deadline during the open itself has nothing granted to
+        // close.
         let open = async {
             let handle = self.handle.lock().await;
-            let channel = handle
+            handle
                 .channel_open_session()
                 .await
-                .map_err(|e| SshError::Channel(format!("exec channel open: {e}")))?;
-            channel
-                .exec(true, command)
-                .await
-                .map_err(|e| SshError::Channel(format!("exec({command}): {e}")))?;
-            Ok::<_, SshError>(channel)
+                .map_err(|e| SshError::Channel(format!("exec channel open: {e}")))
         };
         let mut channel = match deadline {
             None => open.await?,
-            // Elapsing here reads the same as elapsing during the run:
-            // the exec request may already have reached the host, so the
-            // caller must still treat the command as possibly started.
             Some((at, limit)) => match tokio::time::timeout_at(at, open).await {
                 Ok(channel) => channel?,
                 Err(_) => return Err(SshError::ExecTimeout(limit.as_secs())),
             },
         };
+        let request = channel.exec(true, command);
+        let requested = match deadline {
+            None => request.await,
+            // Elapsing here reads the same as elapsing during the run:
+            // the exec request may already have reached the host, so the
+            // caller must still treat the command as possibly started.
+            Some((at, limit)) => match tokio::time::timeout_at(at, request).await {
+                Ok(requested) => requested,
+                Err(_) => {
+                    let _ = channel.close().await;
+                    return Err(SshError::ExecTimeout(limit.as_secs()));
+                }
+            },
+        };
+        if let Err(e) = requested {
+            let _ = channel.close().await;
+            return Err(SshError::Channel(format!("exec({command}): {e}")));
+        }
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_code: Option<u32> = None;
