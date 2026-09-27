@@ -2474,7 +2474,7 @@ pub(super) fn lookup(key: &str) -> &'static str {
         "zmodem_orphans_busy" => "A download is being received into the same folder, so nothing was moved. The waiting files stay there and are offered again at the next launch.",
         "selection_hidden" => "{n} not shown",
         "proxy_output_title" => "The proxy says",
-        "proxy_open_link" => "Open link",
+        "proxy_open_link_host" => "Open {host}",
         _ => "???",
     }
 }

@@ -35,10 +35,10 @@ pub enum SshMessage {
     SshPaneBanner(Uuid, String),
     /// A line a command proxy printed while the tab dial of `pane_id` is
     /// pending: shown on the progress card tracking that dial.
-    SshProxyOutput(Uuid, String),
+    SshProxyOutput(Uuid, oryxis_ssh::ProxyOutputLine),
     /// The same for a split-pane / in-place dial (no card): written into
     /// the pane as a dim marker line.
-    SshPaneProxyOutput(Uuid, String),
+    SshPaneProxyOutput(Uuid, oryxis_ssh::ProxyOutputLine),
     SshConnected(Uuid, crate::state::TerminalTransport),  // (pane_id, transport)
     /// Opening a session on a pooled connection failed (F2 reuse), so
     /// the pane dials for real: `(pane_id)`. The tab index is

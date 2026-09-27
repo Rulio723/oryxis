@@ -2433,7 +2433,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "In denselben Ordner wird gerade ein Download empfangen, daher wurde nichts verschoben. Die wartenden Dateien bleiben dort und werden beim nächsten Start erneut angeboten.",
         "selection_hidden" => "{n} nicht angezeigt",
         "proxy_output_title" => "Der Proxy meldet",
-        "proxy_open_link" => "Link öffnen",
+        "proxy_open_link_host" => "{host} öffnen",
 _ => return None,
     })
 }

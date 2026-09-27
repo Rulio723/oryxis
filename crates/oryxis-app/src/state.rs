@@ -448,7 +448,7 @@ pub(crate) struct ConnectionProgress {
     /// refreshes credentials puts its login instructions, issue #223).
     /// Capped like the banner: it is a local process's output, but an
     /// endless one must not grow the card without bound.
-    pub proxy_output: Vec<String>,
+    pub proxy_output: Vec<oryxis_ssh::ProxyOutputLine>,
     /// The task carrying this dial, so closing the card (or leaving it
     /// for the editor) STOPS the dial and, through the transport's
     /// `kill_on_drop`, the proxy process. A plain handle, never
@@ -494,7 +494,7 @@ pub(crate) enum SshStreamMsg {
     /// Pre-auth banner from the server (RFC 4252 §5.4).
     Banner(String),
     /// One line a command proxy printed while the dial is pending.
-    ProxyOutput(String),
+    ProxyOutput(oryxis_ssh::ProxyOutputLine),
     Connected(Arc<SshSession>),
     HostKeyVerify(oryxis_ssh::HostKeyQuery),
     ProxyCommandVerify(oryxis_ssh::ProxyCommandQuery),

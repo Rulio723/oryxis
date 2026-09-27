@@ -292,20 +292,30 @@ impl Oryxis {
 
         // What a command proxy said while this dial was pending (issue
         // #223): login instructions, a browser URL, "credentials expired,
-        // refreshing". The proxy is a LOCAL process the user approved, so
-        // a URL it prints is offered as a button, and opens only on a
-        // click, never by itself. Built here, right after the banner, so
-        // its link rows are recorded in display order.
+        // refreshing". Every line is SHOWN, but only a URL from the
+        // proxy's STDERR (the local process the user approved) becomes a
+        // button: a line before the SSH banner may be the remote server's
+        // own, relayed by a proxy like `nc %h %p`. Each button names the
+        // host it opens and acts only on a click. Built here, right after
+        // the banner, so its link rows are recorded in display order.
         let proxy_block: Element<'_, Message> = if progress.proxy_output.is_empty() {
             Space::new().into()
         } else {
-            let body = self.redact_progress(progress, &progress.proxy_output.join("\n"));
+            let joined = progress
+                .proxy_output
+                .iter()
+                .map(|l| l.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let body = self.redact_progress(progress, &joined);
             let box_h = (body.lines().count() as f32 * 17.0 + 22.0).min(140.0);
             let mut links: Vec<Element<'_, Message>> = Vec::new();
             for url in proxy_output_urls(&progress.proxy_output) {
+                let label = crate::i18n::t("proxy_open_link_host")
+                    .replace("{host}", &url_host_label(&url));
                 let msg = Message::OpenUrl(url);
                 let btn = crate::widgets::styled_button_owned(
-                    crate::i18n::t("proxy_open_link").to_string(),
+                    label,
                     Some(msg.clone()),
                     OryxisColors::t().accent,
                 );
@@ -1150,14 +1160,15 @@ impl Oryxis {
     }
 }
 
-/// The web links a command proxy printed, in order, each once, at most
-/// three (a login prints one; a card of buttons would bury the card).
-/// Trailing punctuation that is almost always sentence, not URL, is
-/// trimmed.
-fn proxy_output_urls(lines: &[String]) -> Vec<String> {
+/// The web links the local proxy printed on its STDERR, in order, each
+/// once, at most three (a login prints one; a card of buttons would bury
+/// the card). Lines from before the SSH banner are skipped: they may be
+/// the remote server's (see `oryxis_ssh::ProxyOutputSource`). Trailing
+/// punctuation that is almost always sentence, not URL, is trimmed.
+fn proxy_output_urls(lines: &[oryxis_ssh::ProxyOutputLine]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for line in lines {
-        for word in line.split_whitespace() {
+    for line in lines.iter().filter(|l| l.is_local()) {
+        for word in line.text.split_whitespace() {
             let start = word.find("https://").or_else(|| word.find("http://"));
             let Some(start) = start else { continue };
             let url = word[start..].trim_end_matches(['.', ',', ';', ':', ')', ']', '>', '"', '\'']);
@@ -1172,23 +1183,62 @@ fn proxy_output_urls(lines: &[String]) -> Vec<String> {
     out
 }
 
+/// The host a link opens, as the button names it: what sits between
+/// `://` and the path, with any `user@` in front dropped (in
+/// `https://sso.example@evil.example/` the browser goes to
+/// `evil.example`, so that is what the button must say).
+fn url_host_label(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    host.to_string()
+}
+
 #[cfg(test)]
 mod proxy_output_tests {
-    use super::proxy_output_urls;
+    use super::{proxy_output_urls, url_host_label};
+    use oryxis_ssh::{ProxyOutputLine, ProxyOutputSource};
+
+    fn stderr(text: &str) -> ProxyOutputLine {
+        ProxyOutputLine { text: text.to_string(), source: ProxyOutputSource::Stderr }
+    }
+
+    fn before_banner(text: &str) -> ProxyOutputLine {
+        ProxyOutputLine { text: text.to_string(), source: ProxyOutputSource::BeforeBanner }
+    }
 
     #[test]
     fn the_login_url_a_proxy_prints_is_found_once() {
         let lines = vec![
-            "WARN Expired SSH credentials found. Will refresh...".to_string(),
-            "Open https://sso.example/device?code=AB-12 in a browser.".to_string(),
-            "(or visit <https://sso.example/device?code=AB-12>)".to_string(),
+            stderr("WARN Expired SSH credentials found. Will refresh..."),
+            stderr("Open https://sso.example/device?code=AB-12 in a browser."),
+            stderr("(or visit <https://sso.example/device?code=AB-12>)"),
         ];
         assert_eq!(proxy_output_urls(&lines), vec!["https://sso.example/device?code=AB-12"]);
     }
 
     #[test]
     fn a_line_without_a_link_offers_none() {
-        assert!(proxy_output_urls(&["token refreshed, connecting".to_string()]).is_empty());
-        assert!(proxy_output_urls(&["see https://".to_string()]).is_empty());
+        assert!(proxy_output_urls(&[stderr("token refreshed, connecting")]).is_empty());
+        assert!(proxy_output_urls(&[stderr("see https://")]).is_empty());
+    }
+
+    #[test]
+    fn a_link_before_the_banner_is_shown_but_never_offered() {
+        // A relaying proxy hands over the remote server's own lines.
+        let lines = vec![
+            before_banner("Login: https://evil.example/sso"),
+            stderr("Open https://sso.example/device in a browser."),
+        ];
+        assert_eq!(proxy_output_urls(&lines), vec!["https://sso.example/device"]);
+        assert!(proxy_output_urls(&[before_banner("https://evil.example/x")]).is_empty());
+    }
+
+    #[test]
+    fn the_button_names_the_host_the_browser_goes_to() {
+        assert_eq!(url_host_label("https://sso.example/device?code=1"), "sso.example");
+        assert_eq!(url_host_label("https://sso.example:8443/x"), "sso.example:8443");
+        assert_eq!(url_host_label("https://sso.example@evil.example/x"), "evil.example");
+        assert_eq!(url_host_label("http://host.example"), "host.example");
     }
 }

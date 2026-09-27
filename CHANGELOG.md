@@ -6,6 +6,9 @@ project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- A command proxy line runs as `exec <line>`, the way OpenSSH runs it, and stopping a dial ends the proxy together with anything it started.
+
 ### Fixed
 - A command proxy that logs in first (an expired SSO session, a browser URL) no longer fails the dial; its output shows on the connect card (#223, reported by @guptakanishka90).
 - A host-key or command-proxy prompt no longer times the connection out while you read it; closing the connect card stops the dial and its proxy.

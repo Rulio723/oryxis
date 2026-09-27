@@ -70,6 +70,9 @@ impl Oryxis {
     /// messages) forever.
     pub(crate) fn close_tab_sessions(tab: &crate::state::TerminalTab) {
         for pane in tab.pane_grid.panes.values() {
+            // A dial still in flight (a command proxy parked on a login)
+            // stops with its tab, proxy process included.
+            pane.abort_dial();
             if let Some(session) = &pane.session {
                 session.close();
             }
@@ -392,6 +395,8 @@ impl Oryxis {
                 let mut closed_host = None;
                 let mut closed_pane = None;
                 if let Some(pane) = tab.pane_grid.panes.get_mut(&target) {
+                    // A dial still in flight stops with the pane.
+                    pane.abort_dial();
                     if let Some(session) = pane.session.take() {
                         session.close();
                     }

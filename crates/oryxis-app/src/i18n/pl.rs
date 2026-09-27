@@ -2465,7 +2465,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "Do tego samego folderu odbierane jest pobieranie, więc nic nie zostało przeniesione. Oczekujące pliki zostają tam i zostaną zaproponowane ponownie przy następnym uruchomieniu.",
         "selection_hidden" => "{n} niewidocznych",
         "proxy_output_title" => "Komunikat proxy",
-        "proxy_open_link" => "Otwórz link",
+        "proxy_open_link_host" => "Otwórz {host}",
 _ => return None,
     })
 }

@@ -2465,7 +2465,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "У ту саму теку зараз приймається завантаження, тому нічого не переміщено. Файли, що очікують, залишаються там і будуть запропоновані знову під час наступного запуску.",
         "selection_hidden" => "{n} не показано",
         "proxy_output_title" => "Повідомлення проксі",
-        "proxy_open_link" => "Відкрити посилання",
+        "proxy_open_link_host" => "Відкрити {host}",
 _ => return None,
     })
 }

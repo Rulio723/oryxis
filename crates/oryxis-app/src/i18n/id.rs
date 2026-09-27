@@ -2466,7 +2466,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "Sebuah unduhan sedang diterima ke folder yang sama, jadi tidak ada yang dipindahkan. Berkas yang menunggu tetap di sana dan akan ditawarkan lagi saat aplikasi dibuka berikutnya.",
         "selection_hidden" => "{n} tidak ditampilkan",
         "proxy_output_title" => "Keluaran proxy",
-        "proxy_open_link" => "Buka tautan",
+        "proxy_open_link_host" => "Buka {host}",
 _ => return None,
     })
 }

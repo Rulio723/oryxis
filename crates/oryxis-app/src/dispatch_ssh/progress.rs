@@ -208,7 +208,7 @@ impl Oryxis {
                 // Card copy only, scoped to the dial this card tracks, and
                 // capped: a proxy that prints forever must not grow it.
                 const PROXY_LINES_CAP: usize = 200;
-                if !line.trim().is_empty()
+                if !line.text.trim().is_empty()
                     && let Some(p) = self.connecting.as_mut().filter(|p| p.pane_id == pane_id)
                     && p.proxy_output.len() < PROXY_LINES_CAP
                 {
@@ -218,12 +218,16 @@ impl Oryxis {
             SshMessage::SshPaneProxyOutput(pane_id, line) => {
                 // Split-pane / in-place dial: no card, so the proxy's words
                 // land in the pane as dim marker lines, the way the
-                // "[connecting to ...]" line does.
-                if !line.trim().is_empty()
+                // "[connecting to ...]" line does. The engine sanitized the
+                // line already; it is reduced again here because this is
+                // the one place it reaches a terminal EMULATOR, where a
+                // stray escape from a relayed server line would act.
+                let text = oryxis_ssh::sanitize_proxy_line(&line.text);
+                if !text.trim().is_empty()
                     && let Some(pane) = self.pane_by_id_mut(pane_id)
                     && let Ok(mut state) = pane.terminal.lock()
                 {
-                    state.process(format!("\x1b[2m{}\x1b[0m\r\n", line.trim_end()).as_bytes());
+                    state.process(format!("\x1b[2m{}\x1b[0m\r\n", text).as_bytes());
                 }
             }
             SshMessage::SshPaneBanner(pane_id, text) => {

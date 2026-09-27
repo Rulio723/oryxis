@@ -2465,7 +2465,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "Aynı klasöre bir indirme alınıyor, bu yüzden hiçbir şey taşınmadı. Bekleyen dosyalar orada kalır ve bir sonraki açılışta yeniden sunulur.",
         "selection_hidden" => "{n} tanesi gösterilmiyor",
         "proxy_output_title" => "Proxy çıktısı",
-        "proxy_open_link" => "Bağlantıyı aç",
+        "proxy_open_link_host" => "{host} aç",
 _ => return None,
     })
 }

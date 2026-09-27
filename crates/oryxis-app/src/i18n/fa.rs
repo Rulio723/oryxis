@@ -2453,7 +2453,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "یک دانلود در حال دریافت در همان پوشه است، بنابراین چیزی جابه‌جا نشد. فایل‌های منتظر همان‌جا می‌مانند و در اجرای بعدی دوباره پیشنهاد می‌شوند.",
         "selection_hidden" => "{n} مورد نمایش داده نشده",
         "proxy_output_title" => "پیام پراکسی",
-        "proxy_open_link" => "باز کردن پیوند",
+        "proxy_open_link_host" => "باز کردن {host}",
 _ => return None,
     })
 }

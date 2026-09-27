@@ -2470,7 +2470,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "Do stejné složky se právě přijímá stahování, proto se nic nepřesunulo. Čekající soubory tam zůstávají a budou znovu nabídnuty při příštím spuštění.",
         "selection_hidden" => "{n} nezobrazeno",
         "proxy_output_title" => "Zpráva proxy",
-        "proxy_open_link" => "Otevřít odkaz",
+        "proxy_open_link_host" => "Otevřít {host}",
 _ => return None,
     })
 }

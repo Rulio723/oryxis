@@ -2471,7 +2471,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "उसी फ़ोल्डर में एक डाउनलोड प्राप्त हो रहा है, इसलिए कुछ भी नहीं ले जाया गया। प्रतीक्षारत फ़ाइलें वहीं रहती हैं और अगली बार खोलने पर फिर से पेश की जाएँगी।",
         "selection_hidden" => "{n} नहीं दिखाए गए",
         "proxy_output_title" => "प्रॉक्सी का संदेश",
-        "proxy_open_link" => "लिंक खोलें",
+        "proxy_open_link_host" => "{host} खोलें",
 _ => return None,
     })
 }

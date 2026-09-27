@@ -2433,7 +2433,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "Se está recibiendo una descarga en la misma carpeta, así que no se movió nada. Los archivos pendientes siguen allí y se ofrecerán de nuevo en el próximo inicio.",
         "selection_hidden" => "{n} fuera de vista",
         "proxy_output_title" => "El proxy dice",
-        "proxy_open_link" => "Abrir enlace",
+        "proxy_open_link_host" => "Abrir {host}",
 _ => return None,
     })
 }

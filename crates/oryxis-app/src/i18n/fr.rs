@@ -2432,7 +2432,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "Un téléchargement est en cours de réception dans le même dossier, rien n'a donc été déplacé. Les fichiers en attente y restent et seront proposés à nouveau au prochain lancement.",
         "selection_hidden" => "{n} non affichés",
         "proxy_output_title" => "Le proxy indique",
-        "proxy_open_link" => "Ouvrir le lien",
+        "proxy_open_link_host" => "Ouvrir {host}",
 _ => return None,
     })
 }

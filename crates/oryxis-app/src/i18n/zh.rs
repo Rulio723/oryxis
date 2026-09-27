@@ -2433,7 +2433,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "zmodem_orphans_busy" => "同一文件夹中正在接收下载，因此没有移动任何文件。等待中的文件会保留在那里，并在下次启动时再次提供。",
         "selection_hidden" => "{n} 个未显示",
         "proxy_output_title" => "代理输出",
-        "proxy_open_link" => "打开链接",
+        "proxy_open_link_host" => "打开 {host}",
 _ => return None,
     })
 }

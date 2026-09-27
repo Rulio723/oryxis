@@ -30,7 +30,7 @@ enum PaneConnMsg {
     /// Pre-auth banner from the server (RFC 4252 §5.4).
     Banner(String),
     /// A line a command proxy printed while the dial is pending.
-    ProxyOutput(String),
+    ProxyOutput(oryxis_ssh::ProxyOutputLine),
     Connected(Arc<SshSession>),
     Data(Vec<u8>),
     Disconnected,
@@ -426,7 +426,7 @@ impl Oryxis {
                 // A command proxy's own output while the dial is pending
                 // (issue #223): its login instructions land on the card.
                 let (proxy_out_tx, mut proxy_out_rx) =
-                    tokio::sync::mpsc::unbounded_channel::<String>();
+                    tokio::sync::mpsc::unbounded_channel::<oryxis_ssh::ProxyOutputLine>();
                 self.kbi_response_tx = Some(kbi_resp_tx);
 
                 let conn_host = conn.hostname.clone();
@@ -623,6 +623,9 @@ impl Oryxis {
                             .with_algorithm_overrides(algo_ciphers, algo_kex, algo_macs, algo_host_keys)
                             .with_banner_sink(banner_tx)
                             .with_proxy_output(proxy_out_tx)
+                            // The card shows the proxy's words and Close
+                            // aborts this task: a login may run long.
+                            .with_attended(true)
                             .with_pinned_agent_key(pinned_agent.as_deref())
                         .with_auto_interactive_fallback(is_quick);
 
@@ -1563,7 +1566,8 @@ impl Oryxis {
         let (banner_tx, mut banner_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         // A command proxy's output while the dial is pending (issue #223),
         // written into the pane as dim marker lines.
-        let (proxy_out_tx, mut proxy_out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (proxy_out_tx, mut proxy_out_rx) =
+            tokio::sync::mpsc::unbounded_channel::<oryxis_ssh::ProxyOutputLine>();
 
         let stream = iced::stream::channel::<PaneConnMsg>(128, move |mut sender: iced::futures::channel::mpsc::Sender<PaneConnMsg>| async move {
             let engine = SshEngine::new()
@@ -1587,6 +1591,9 @@ impl Oryxis {
                 .with_algorithm_overrides(algo_ciphers, algo_kex, algo_macs, algo_host_keys)
                 .with_banner_sink(banner_tx)
                 .with_proxy_output(proxy_out_tx)
+                // The pane shows the proxy's words, and closing or
+                // restarting the pane aborts this task (`Pane::dial_task`).
+                .with_attended(true)
                 .with_pinned_agent_key(pinned_agent.as_deref())
                 .with_auto_interactive_fallback(is_quick);
 
@@ -1660,7 +1667,7 @@ impl Oryxis {
             }
         });
 
-        Task::stream(stream).map(move |m| match m {
+        let (dial, dial_handle) = Task::stream(stream).map(move |m| match m {
             PaneConnMsg::HostKey(q) => Message::Ssh(SshMessage::SshHostKeyVerify(q)),
             PaneConnMsg::ProxyCommand(q) => Message::Ssh(SshMessage::SshProxyCommandVerify(
                 Box::new(q),
@@ -1678,6 +1685,13 @@ impl Oryxis {
             PaneConnMsg::Disconnected => Message::Ssh(SshMessage::SshDisconnected(pane_id)),
             PaneConnMsg::Error(e) => Message::Ssh(SshMessage::PaneConnectError(pane_id, e)),
         })
+        .abortable();
+        // The pane owns the handle so closing it (or its tab, or the
+        // manual lock) stops a dial still in flight (`Pane::abort_dial`).
+        if let Some(pane) = self.pane_by_id_mut(pane_id) {
+            pane.dial_task = Some(dial_handle);
+        }
+        dial
     }
 }
 

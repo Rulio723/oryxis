@@ -596,6 +596,15 @@ pub(crate) struct Pane {
     /// every completion (`SshConnected` attach, `SshDisconnected`,
     /// `PaneConnectError`).
     pub connecting: bool,
+    /// The task carrying this pane's in-place dial (a split, a reconnect,
+    /// a restored tab dialled at launch), so closing the pane or its tab,
+    /// or the manual lock, STOPS a dial still in flight, and with it a
+    /// command proxy parked on a login (issue #223). A plain handle, never
+    /// `abort_on_drop`: the same task carries the session once connected,
+    /// and a pane moves between tabs without being dropped. Only aborted
+    /// while `connecting` ([`Pane::abort_dial`]); a live session is torn
+    /// down by `session.close()` as always.
+    pub dial_task: Option<iced::task::Handle>,
     /// Session log ID for terminal recording.
     pub session_log_id: Option<Uuid>,
     /// Recorded bytes not yet flushed to the vault. PTY output appends
@@ -901,6 +910,17 @@ pub(crate) fn default_chat_mode() -> crate::state::ChatMode {
 }
 
 impl Pane {
+    /// Stop this pane's dial if one is still in flight. A connected
+    /// pane's task carries its live session, which is closed through the
+    /// session instead, so this leaves it alone.
+    pub fn abort_dial(&self) {
+        if self.connecting
+            && let Some(handle) = &self.dial_task
+        {
+            handle.abort();
+        }
+    }
+
     pub fn new(label: String, terminal: Arc<Mutex<TerminalState>>) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -909,6 +929,7 @@ impl Pane {
             session: None,
             purpose: PanePurpose::default(),
             connecting: false,
+            dial_task: None,
             session_log_id: None,
             session_log_buf: Vec::new(),
             session_log_t0: None,
