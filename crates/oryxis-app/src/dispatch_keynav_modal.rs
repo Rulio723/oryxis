@@ -179,6 +179,15 @@ impl Oryxis {
         if self.sftp.row_menu.is_some() {
             return Some((ModalSurface::SftpRowMenu, SurfaceFamily::Menu));
         }
+        // The connect-progress card, below everything above: any dialog,
+        // menu or prompt drawn over it (or inside it) owns the keys first.
+        // The host-key and command-proxy prompts are `Modal`s and were
+        // answered by the loop above; the keyboard-interactive form is a
+        // `Modal` too but sits outside `ESC_ORDER`, so the blocking check
+        // is what yields to it (its inputs keep Enter for their submit).
+        if self.connect_progress_on_screen() && !self.any_modal_blocks_input() {
+            return Some((ModalSurface::ConnectProgress, SurfaceFamily::Confirm));
+        }
         None
     }
 
@@ -228,10 +237,31 @@ impl Oryxis {
         if modifiers.control() || modifiers.alt() || modifiers.logo() {
             return None;
         }
+        // The connect-progress card appears by itself (a dial started
+        // from anywhere, a failure landing), so a key aimed elsewhere
+        // must never act on it: Enter and Space only activate a row the
+        // KEYBOARD ringed, never the row a resting cursor happens to be
+        // over (a hover selection is invisible until a key shows it),
+        // and there is no default row to fall back on.
+        let ring_shown = self.keynav.modal.kbd.get()
+            && matches!(self.keynav.modal.selected, Some((tag, _)) if tag == surface);
         // Any key reaching the modal router flips the modality gate:
         // from here on the (possibly hover-made) selection shows its
         // ring, until the next hover hides it again (focus-visible).
         self.keynav.modal.kbd.set(true);
+        if surface == ModalSurface::ConnectProgress
+            && let Some(task) = Self::connect_progress_key(key, ring_shown)
+        {
+            return task.map(|()| {
+                if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                    self.keynav.modal.selected = None;
+                    self.keynav.modal.kbd.set(false);
+                    Task::none()
+                } else {
+                    self.modal_nav_activate(surface).unwrap_or_else(Task::none)
+                }
+            });
+        }
         let has_input = Self::modal_surface_has_input(surface);
         let len = self.keynav.modal.items.borrow().len();
 
@@ -323,6 +353,29 @@ impl Oryxis {
         }
     }
 
+    /// The connect-progress card's own answer to Enter, Space and Esc,
+    /// before the shared confirm handling (which would activate row 0
+    /// when nothing is ringed). `None` = not one of those keys, let the
+    /// shared router handle it (Tab and arrows move the ring as on any
+    /// confirm). `Some(None)` = decline, the key goes on as it would
+    /// without this surface. `Some(Some(()))` = act: Enter / Space
+    /// activate the ringed row, Esc drops the ring.
+    ///
+    /// Esc never closes the card. Its Close removes the tab, and
+    /// nothing else in the app closes a tab on a bare Esc (Ctrl+W is
+    /// that key); while the dial is live, closing would also abort it.
+    /// So Esc only returns the card to idle, the vault area's meaning,
+    /// and declines when there is no ring to drop.
+    fn connect_progress_key(key: &keyboard::Key, ring_shown: bool) -> Option<Option<()>> {
+        use keyboard::key::Named;
+        let activate = matches!(key, keyboard::Key::Named(Named::Enter | Named::Space))
+            || matches!(key, keyboard::Key::Character(c) if c.as_str() == " ");
+        if activate || matches!(key, keyboard::Key::Named(Named::Escape)) {
+            return Some(ring_shown.then_some(()));
+        }
+        None
+    }
+
     /// Move the selection one step (wrapping), starting from the
     /// effective position (explicit selection or surface default).
     fn modal_nav_step(&mut self, surface: ModalSurface, forward: bool) {
@@ -369,5 +422,30 @@ impl Oryxis {
         // cycling.
         self.keynav.modal.selected = Some((surface, idx));
         Some(self.update(msg))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::Oryxis;
+    use iced::keyboard::{key::Named, Key};
+
+    /// The connect-progress card appears by itself, so a bare Enter /
+    /// Space / Esc acts on it only once the keyboard has ringed a row;
+    /// every other key is left to the shared router.
+    #[test]
+    fn the_progress_card_acts_only_on_a_ringed_row() {
+        let enter = Key::Named(Named::Enter);
+        let space = Key::Named(Named::Space);
+        let space_char = Key::Character(" ".into());
+        let esc = Key::Named(Named::Escape);
+        for key in [&enter, &space, &space_char, &esc] {
+            assert_eq!(Oryxis::connect_progress_key(key, true), Some(Some(())));
+            assert_eq!(Oryxis::connect_progress_key(key, false), Some(None));
+        }
+        for key in [Key::Named(Named::Tab), Key::Named(Named::ArrowDown), Key::Character("a".into())] {
+            assert_eq!(Oryxis::connect_progress_key(&key, true), None);
+            assert_eq!(Oryxis::connect_progress_key(&key, false), None);
+        }
     }
 }

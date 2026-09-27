@@ -202,6 +202,14 @@ pub(crate) enum ModalSurface {
     /// The SFTP right-click row context menu (`sftp.row_menu`), which
     /// lives outside the `overlay` / `Modal` systems.
     SftpRowMenu,
+    /// The connect-progress card (`view_connection_progress`), the whole
+    /// content of a tab that is dialling or failed. NOT a `Modal`: every
+    /// modal blocks input, which would swallow Ctrl+Tab, Ctrl+W and the
+    /// command palette for as long as a host takes to answer. It only
+    /// joins the modal KEY layer, at the lowest precedence, and only
+    /// while no prompt of its own (host key, command proxy, the
+    /// keyboard-interactive form) owns the keyboard.
+    ConnectProgress,
 }
 
 /// Selection + per-frame row recording for the modal layer.

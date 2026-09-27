@@ -115,11 +115,45 @@ impl Oryxis {
         out
     }
 
+    /// Whether this frame's card owns the modal key layer, and so
+    /// records its rows. Read once per frame: a card under a dialog,
+    /// a menu or one of its own prompts leaves the recording to them.
+    fn progress_keys_owned(&self) -> bool {
+        matches!(
+            self.modal_nav_surface(),
+            Some((crate::keynav::ModalSurface::ConnectProgress, _))
+        )
+    }
+
+    /// One of the card's buttons as a keyboard row, in display order;
+    /// the plain button when the card does not own the keys this frame.
+    fn progress_slot<'a>(
+        &self,
+        owned: bool,
+        msg: Message,
+        radius: f32,
+        contrast: bool,
+        el: Element<'a, Message>,
+    ) -> Element<'a, Message> {
+        if owned {
+            self.modal_nav_slot(crate::keynav::RowAction::activate(msg), radius, contrast, el)
+        } else {
+            el
+        }
+    }
+
     pub(crate) fn view_connection_progress(&self) -> Element<'_, Message> {
         let progress = match &self.connecting {
             Some(p) => p,
             None => return Space::new().into(),
         };
+        // Keyboard rows (issue #52 convention), recorded in DISPLAY order
+        // and with NO default row: the card appears by itself, so only a
+        // row the keyboard ringed may act (`handle_modal_nav_key`).
+        let owned = self.progress_keys_owned();
+        if owned {
+            self.modal_nav_reset();
+        }
 
         let failed = progress.failed;
 
@@ -170,7 +204,13 @@ impl Oryxis {
         if self.progress_privacy_on(progress) {
             // Same eye affordance as Logs / Known Hosts, so the masked
             // header and host-key prompt can be revealed in place.
-            header_children.push(crate::widgets::privacy_reveal_btn(self.privacy.revealed));
+            header_children.push(self.progress_slot(
+                owned,
+                Message::TogglePrivacyReveal,
+                6.0,
+                false,
+                crate::widgets::privacy_reveal_btn(self.privacy.revealed),
+            ));
         }
         // Saved hosts offer Edit only once the connect failed (the card
         // resolves in seconds and the host has a permanent editor on its
@@ -184,19 +224,27 @@ impl Oryxis {
             if self.progress_privacy_on(progress) {
                 header_children.push(Space::new().width(8).into());
             }
-            header_children.push(
-                button(
-                    container(text(crate::i18n::t("edit_host")).size(13).color(OryxisColors::t().text_primary))
-                        .padding(Padding { top: 8.0, right: 16.0, bottom: 8.0, left: 16.0 }),
-                )
-                .on_press(Message::Ssh(SshMessage::SshEditFromProgress))
-                .style(|_, _| button::Style {
-                    background: Some(Background::Color(OryxisColors::t().bg_surface)),
-                    border: Border { radius: Radius::from(8.0), ..Default::default() },
-                    ..Default::default()
-                })
-                .into(),
-            );
+            let edit_btn: Element<'_, Message> = button(
+                container(text(crate::i18n::t("edit_host")).size(13).color(OryxisColors::t().text_primary))
+                    .padding(Padding { top: 8.0, right: 16.0, bottom: 8.0, left: 16.0 }),
+            )
+            .on_press(Message::Ssh(SshMessage::SshEditFromProgress))
+            .style(|_, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => OryxisColors::t().bg_hover,
+                    _ => OryxisColors::t().bg_surface,
+                })),
+                border: Border { radius: Radius::from(8.0), ..Default::default() },
+                ..Default::default()
+            })
+            .into();
+            header_children.push(self.progress_slot(
+                owned,
+                Message::Ssh(SshMessage::SshEditFromProgress),
+                8.0,
+                false,
+                edit_btn,
+            ));
         }
 
         let header = container(crate::widgets::dir_row(header_children).align_y(iced::Alignment::Center))
@@ -249,6 +297,36 @@ impl Oryxis {
         let phase = ((tick % 8) as f32) / 8.0;
         let pulse = if phase < 0.5 { phase * 2.0 } else { (1.0 - phase) * 2.0 };
 
+        // A batch connect still owes dials (issue #230): say how many and
+        // offer to drop them, in every state of the card, so a batch of
+        // thirty hosts can be stopped without sitting through each one.
+        // The dial on screen stays the user's to finish or close. Built
+        // here, ahead of the action row it sits above, so its keyboard
+        // row is recorded in display order.
+        let batch_row: Option<Element<'_, Message>> = (!self.batch_dials.is_empty()).then(|| {
+            let queued = text(
+                crate::i18n::t("batch_connect_queued")
+                    .replace("{hosts}", &crate::i18n::host_count(self.batch_dials.len())),
+            )
+            .size(12)
+            .color(OryxisColors::t().text_muted);
+            let cancel_msg = Message::Tabs(crate::app::TabsMessage::BatchConnectCancelRemaining);
+            let cancel = self.progress_slot(
+                owned,
+                cancel_msg.clone(),
+                8.0,
+                false,
+                crate::widgets::styled_button(
+                    crate::i18n::t("batch_connect_cancel_remaining"),
+                    cancel_msg,
+                    OryxisColors::t().bg_hover,
+                ),
+            );
+            crate::widgets::dir_row(vec![queued.into(), Space::new().width(Length::Fill).into(), cancel])
+                .align_y(iced::Alignment::Center)
+                .into()
+        });
+
         // Host key verification or normal status/log timeline.
         let (status_widget, body_widget, bottom): (
             Element<'_, Message>,
@@ -296,31 +374,52 @@ impl Oryxis {
                 );
             }
             let body: Element<'_, Message> = body_col.into();
+            // Keyboard rows with no default, like the rest of the card:
+            // enabling weaker algorithms is a choice, never a stray Enter.
+            let cancel_msg = Message::Ssh(SshMessage::LegacyAlgoCancel);
+            let once_msg = Message::Ssh(SshMessage::LegacyAlgoAccept { remember: false });
             let mut btm_row = row![
-                crate::widgets::styled_button(
-                    crate::i18n::t("cancel"),
-                    Message::Ssh(SshMessage::LegacyAlgoCancel),
-                    OryxisColors::t().text_muted,
+                self.progress_slot(
+                    owned,
+                    cancel_msg.clone(),
+                    8.0,
+                    false,
+                    crate::widgets::styled_button(
+                        crate::i18n::t("cancel"),
+                        cancel_msg,
+                        OryxisColors::t().text_muted,
+                    ),
                 ),
                 Space::new().width(Length::Fill),
-                crate::widgets::styled_button(
-                    crate::i18n::t("legacy_algo_connect_once"),
-                    Message::Ssh(SshMessage::LegacyAlgoAccept { remember: false }),
-                    if is_quick {
-                        OryxisColors::t().accent
-                    } else {
-                        OryxisColors::t().bg_hover
-                    },
+                self.progress_slot(
+                    owned,
+                    once_msg.clone(),
+                    8.0,
+                    is_quick,
+                    crate::widgets::styled_button(
+                        crate::i18n::t("legacy_algo_connect_once"),
+                        once_msg,
+                        if is_quick {
+                            OryxisColors::t().accent
+                        } else {
+                            OryxisColors::t().bg_hover
+                        },
+                    ),
                 ),
             ];
             if !is_quick {
-                btm_row = btm_row.push(Space::new().width(8)).push(
+                let always_msg = Message::Ssh(SshMessage::LegacyAlgoAccept { remember: true });
+                btm_row = btm_row.push(Space::new().width(8)).push(self.progress_slot(
+                    owned,
+                    always_msg.clone(),
+                    8.0,
+                    true,
                     crate::widgets::styled_button(
                         crate::i18n::t("legacy_algo_always"),
-                        Message::Ssh(SshMessage::LegacyAlgoAccept { remember: true }),
+                        always_msg,
                         OryxisColors::t().accent,
                     ),
-                );
+                ));
             }
             let btm: Element<'_, Message> = btm_row.align_y(iced::Alignment::Center).into();
             (status, body, btm)
@@ -395,8 +494,11 @@ impl Oryxis {
                     .padding(Padding { top: 10.0, right: 24.0, bottom: 10.0, left: 24.0 }),
             )
             .on_press(Message::Ssh(SshMessage::SshKbiCancel))
-            .style(|_, _| button::Style {
-                background: Some(Background::Color(OryxisColors::t().bg_surface)),
+            .style(|_, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => OryxisColors::t().bg_hover,
+                    _ => OryxisColors::t().bg_surface,
+                })),
                 border: Border { radius: Radius::from(8.0), ..Default::default() },
                 ..Default::default()
             });
@@ -416,8 +518,17 @@ impl Oryxis {
                     .padding(Padding { top: 10.0, right: 24.0, bottom: 10.0, left: 24.0 }),
                 )
                 .on_press(Message::Ssh(SshMessage::SshKbiSubmit))
-                .style(|_, _| button::Style {
-                    background: Some(Background::Color(OryxisColors::t().accent)),
+                .style(|_, status| button::Style {
+                    background: Some(Background::Color(match status {
+                        // No dedicated hover tone in the palette; nudge the fill
+                        // toward the text colour, as the host-key buttons do.
+                        button::Status::Hovered | button::Status::Pressed => crate::theme::mix(
+                            OryxisColors::t().accent,
+                            OryxisColors::t().text_primary,
+                            0.15,
+                        ),
+                        _ => OryxisColors::t().accent,
+                    })),
                     border: Border { radius: Radius::from(8.0), ..Default::default() },
                     ..Default::default()
                 })
@@ -546,39 +657,14 @@ impl Oryxis {
             ]
             .into();
 
-            (status, self.view_connection_log_timeline(progress, failed, pulse), self.view_connection_log_buttons(progress, failed))
+            (status, self.view_connection_log_timeline(progress, failed, pulse), self.view_connection_log_buttons(progress, failed, owned))
         };
 
-        // A batch connect still owes dials (issue #230): say how many and
-        // offer to drop them, in every state of the card, so a batch of
-        // thirty hosts can be stopped without sitting through each one.
-        // The dial on screen stays the user's to finish or close.
-        let bottom: Element<'_, Message> = if self.batch_dials.is_empty() {
-            bottom
-        } else {
-            let queued = text(
-                crate::i18n::t("batch_connect_queued")
-                    .replace("{hosts}", &crate::i18n::host_count(self.batch_dials.len())),
-            )
-            .size(12)
-            .color(OryxisColors::t().text_muted);
-            let cancel = crate::widgets::styled_button(
-                crate::i18n::t("batch_connect_cancel_remaining"),
-                Message::Tabs(crate::app::TabsMessage::BatchConnectCancelRemaining),
-                OryxisColors::t().bg_hover,
-            );
-            column![
-                crate::widgets::dir_row(vec![
-                    queued.into(),
-                    Space::new().width(Length::Fill).into(),
-                    cancel,
-                ])
-                .align_y(iced::Alignment::Center),
-                Space::new().height(12),
-                bottom,
-            ]
-            .width(Length::Fill)
-            .into()
+        let bottom: Element<'_, Message> = match batch_row {
+            Some(batch_row) => column![batch_row, Space::new().height(12), bottom]
+                .width(Length::Fill)
+                .into(),
+            None => bottom,
         };
 
         container(
@@ -604,15 +690,10 @@ impl Oryxis {
         .into()
     }
 
-    /// The "or authenticate with a saved identity / key" selector for a
-    /// quick-connect host, offered inside the keyboard-interactive prompt
-    /// modal and on the failed-connect screen. `None` when the vault has
-    /// nothing to offer. Selecting an option mutates the ephemeral entry
-    /// and retries the connect with it (`QuickAuthSwitch`).
-    pub(crate) fn view_quick_auth_switch(
-        &self,
-        quick_id: uuid::Uuid,
-    ) -> Option<Element<'_, Message>> {
+    /// The saved identities and keys a quick-connect host can switch to,
+    /// in the order the selector lists them. Shared by the selector and
+    /// its keyboard row, which picks from the same list.
+    pub(crate) fn quick_auth_options(&self) -> Vec<crate::state::QuickAuthOption> {
         let mut options: Vec<crate::state::QuickAuthOption> =
             Vec::with_capacity(self.identities.len() + self.keys.len());
         for i in &self.identities {
@@ -633,6 +714,19 @@ impl Oryxis {
                 label: format!("{}: {}", crate::i18n::t("auth_key"), k.label),
             });
         }
+        options
+    }
+
+    /// The "or authenticate with a saved identity / key" selector for a
+    /// quick-connect host, offered inside the keyboard-interactive prompt
+    /// modal and on the failed-connect screen. `None` when the vault has
+    /// nothing to offer. Selecting an option mutates the ephemeral entry
+    /// and retries the connect with it (`QuickAuthSwitch`).
+    pub(crate) fn view_quick_auth_switch(
+        &self,
+        quick_id: uuid::Uuid,
+    ) -> Option<Element<'_, Message>> {
+        let options = self.quick_auth_options();
         if options.is_empty() {
             return None;
         }
@@ -847,10 +941,44 @@ impl Oryxis {
         &self,
         progress: &crate::state::ConnectionProgress,
         failed: bool,
+        owned: bool,
     ) -> Element<'_, Message> {
         if !failed {
             return Space::new().into();
         }
+
+        // Quick connect that died in the auth stage (a publickey-only
+        // server never even raises the interactive prompt): offer the
+        // saved identities / keys right where the failure landed. Earlier
+        // stages (DNS, TCP, handshake) aren't auth problems, so the
+        // selector would be noise there. It renders ABOVE the button row,
+        // so it is recorded first: display order is the walk order.
+        let switch_section = match progress.origin {
+            crate::state::ProgressOrigin::Quick(id)
+                if progress.step == ConnectionStep::Authenticating =>
+            {
+                self.view_quick_auth_switch(id).map(|section| {
+                    if !owned {
+                        return section;
+                    }
+                    // An ACTION picker: nothing is selected, and picking
+                    // retries with the choice. Left / Right pick the first
+                    // / last option (the mouse's one click, from the
+                    // keyboard); Enter on the row does nothing, because a
+                    // pick_list cannot be opened from code.
+                    let options = self.quick_auth_options();
+                    let pick = |o: Option<&crate::state::QuickAuthOption>| {
+                        o.map(|o| Message::Ssh(SshMessage::QuickAuthSwitch(id, o.choice)))
+                    };
+                    let idx = self.modal_nav_record(crate::keynav::RowAction::picker(
+                        pick(options.last()),
+                        pick(options.first()),
+                    ));
+                    self.modal_nav_ring_at(idx, 8.0, false, section)
+                })
+            }
+            _ => None,
+        };
 
         // Whole-log payload for the clipboard: host header + every line.
         let mut payload = format!("{}\n{}\n", progress.label, progress.hostname);
@@ -870,9 +998,12 @@ impl Oryxis {
             )
             .padding(Padding { top: 10.0, right: 18.0, bottom: 10.0, left: 18.0 }),
         )
-        .on_press(Message::CopyToClipboard(payload))
-        .style(|_, _| button::Style {
-            background: Some(Background::Color(OryxisColors::t().bg_surface)),
+        .on_press(Message::CopyToClipboard(payload.clone()))
+        .style(|_, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered | button::Status::Pressed => OryxisColors::t().bg_hover,
+                _ => OryxisColors::t().bg_surface,
+            })),
             border: Border { radius: Radius::from(8.0), ..Default::default() },
             ..Default::default()
         });
@@ -882,8 +1013,11 @@ impl Oryxis {
                 .padding(Padding { top: 10.0, right: 24.0, bottom: 10.0, left: 24.0 }),
         )
         .on_press(Message::Ssh(SshMessage::SshCloseProgress))
-        .style(|_, _| button::Style {
-            background: Some(Background::Color(OryxisColors::t().bg_surface)),
+        .style(|_, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered | button::Status::Pressed => OryxisColors::t().bg_hover,
+                _ => OryxisColors::t().bg_surface,
+            })),
             border: Border { radius: Radius::from(8.0), ..Default::default() },
             ..Default::default()
         });
@@ -903,35 +1037,53 @@ impl Oryxis {
                 .padding(Padding { top: 10.0, right: 24.0, bottom: 10.0, left: 24.0 }),
             )
             .on_press(Message::Ssh(SshMessage::SshRetry))
-            .style(|_, _| button::Style {
-                background: Some(Background::Color(OryxisColors::t().success)),
+            .style(|_, status| button::Style {
+                background: Some(Background::Color(match status {
+                    // No dedicated hover tone in the palette; nudge the fill
+                    // toward the text colour, as the host-key buttons do.
+                    button::Status::Hovered | button::Status::Pressed => crate::theme::mix(
+                        OryxisColors::t().success,
+                        OryxisColors::t().text_primary,
+                        0.15,
+                    ),
+                    _ => OryxisColors::t().success,
+                })),
                 border: Border { radius: Radius::from(8.0), ..Default::default() },
                 ..Default::default()
             })
         };
 
-        let buttons = crate::widgets::dir_row(vec![
+        // Recorded in reading order (Copy, Close, Start over), the same
+        // logical order `dir_row` lays out and mirrors under RTL.
+        let copy_btn = self.progress_slot(
+            owned,
+            Message::CopyToClipboard(payload),
+            8.0,
+            false,
             copy_btn.into(),
-            Space::new().width(Length::Fill).into(),
+        );
+        let close_btn = self.progress_slot(
+            owned,
+            Message::Ssh(SshMessage::SshCloseProgress),
+            8.0,
+            false,
             close_btn.into(),
-            Space::new().width(8).into(),
+        );
+        let start_over_btn = self.progress_slot(
+            owned,
+            Message::Ssh(SshMessage::SshRetry),
+            8.0,
+            true,
             start_over_btn.into(),
+        );
+        let buttons = crate::widgets::dir_row(vec![
+            copy_btn,
+            Space::new().width(Length::Fill).into(),
+            close_btn,
+            Space::new().width(8).into(),
+            start_over_btn,
         ])
         .align_y(iced::Alignment::Center);
-
-        // Quick connect that died in the auth stage (a publickey-only
-        // server never even raises the interactive prompt): offer the
-        // saved identities / keys right where the failure landed. Earlier
-        // stages (DNS, TCP, handshake) aren't auth problems, so the
-        // selector would be noise there.
-        let switch_section = match progress.origin {
-            crate::state::ProgressOrigin::Quick(id)
-                if progress.step == ConnectionStep::Authenticating =>
-            {
-                self.view_quick_auth_switch(id)
-            }
-            _ => None,
-        };
         match switch_section {
             Some(section) => column![section, Space::new().height(14), buttons]
                 .width(Length::Fill)

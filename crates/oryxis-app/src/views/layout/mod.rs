@@ -120,11 +120,17 @@ impl Oryxis {
     /// background but not their gaps, and a gap onto the desktop reads
     /// as a rendering bug rather than as an effect.
     pub(crate) fn terminal_surface_visible(&self) -> bool {
-        self.active_tab.is_some()
-            && !self
-                .connecting
-                .as_ref()
-                .is_some_and(|cp| Some(cp.tab_idx) == self.active_tab)
+        self.active_tab.is_some() && !self.connect_progress_on_screen()
+    }
+
+    /// The connect-progress card is the content on screen: the active
+    /// tab is the one dialling (or the one whose dial failed). The ONE
+    /// predicate for the content router and for the card's keyboard
+    /// layer, so the keys never drive a card nobody can see.
+    pub(crate) fn connect_progress_on_screen(&self) -> bool {
+        self.connecting
+            .as_ref()
+            .is_some_and(|cp| Some(cp.tab_idx) == self.active_tab)
     }
 
     /// The alpha the terminal backdrop is painted with right now, or
@@ -311,10 +317,7 @@ impl Oryxis {
         // progress log instead of the terminal you asked for, until the
         // connect resolved. The tab strip already scopes this correctly
         // (`tab_bar/entry.rs`, `cp.tab_idx == Some(idx)`); match it here.
-        let connecting_here = self
-            .connecting
-            .as_ref()
-            .is_some_and(|cp| Some(cp.tab_idx) == self.active_tab);
+        let connecting_here = self.connect_progress_on_screen();
         let content: Element<'_, Message> = if connecting_here {
             self.view_connection_progress()
         } else if self.terminal_surface_visible() {

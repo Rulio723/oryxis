@@ -24,6 +24,8 @@ expect "Import"
 screenshot hosts-empty-state
 type tab
 type enter
+# Let the focus land before typing, or the first character is lost.
+settle 250
 type "myserver.example.com"
 settle 250
 type enter
