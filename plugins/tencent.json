@@ -1,0 +1,54 @@
+{
+  "provider_id": "tencent",
+  "versions": [
+    {
+      "version": "0.1.0",
+      "protocol_versions": [
+        1
+      ],
+      "min_app": "0.19.0",
+      "binaries": [
+        {
+          "os": "linux",
+          "arch": "aarch64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/tencent-v0.1.0/oryxis-cloud-tencent-plugin-linux-aarch64",
+          "sha256": "a020b0d40fb962cb485c4d82ad999f004ebb37d793ef7cb92c434f981b84cbbb",
+          "signature": "xhgQpKe1MgPIxpk3gVQx8w+Oy8PLmKwxyKbfVQ6XTEi/bApufRPo000L3JRS2QwER8zNYnk73aXRSvDnpBISDQ==",
+          "size": 2496840
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/tencent-v0.1.0/oryxis-cloud-tencent-plugin-linux-x86_64",
+          "sha256": "93bc4fb4cb4ee66bd38255c3839fe85945fd45cc9c944d6ea0b37fc01035b714",
+          "signature": "uBg6WkGV7o+kltqzJ5aOztL7uGJEaIWxPgMr0CGG+OzNwEZeg4MMD+HcpknFKdQRZykwYCMZIXlUtqUeNz7gBw==",
+          "size": 2606744
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/tencent-v0.1.0/oryxis-cloud-tencent-plugin-macos-aarch64",
+          "sha256": "644e1b5d3febbe052ed395fbbfc4b727fd7b8dec352915120e6fd6ef56379f91",
+          "signature": "o1mApEJH4ik0oh6dPkohlY9xgFTjEcfqq3JBLOb6ntSVmZqN4HjiJBkdYo+RD+pbiDraWJMGXwSkz0iTl+2lDQ==",
+          "size": 2265736
+        },
+        {
+          "os": "windows",
+          "arch": "aarch64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/tencent-v0.1.0/oryxis-cloud-tencent-plugin-windows-aarch64.exe",
+          "sha256": "5ab007de6157fdbd1e6a47c3664e4e602886c8fd2a86df0f33555434e39c3bdb",
+          "signature": "SbCpjcCbTJE+nID1ao94JMA3AS/oskKxhr5emgN7mj1uiMZMqRrLkArXBf0fPtD9uC9JcirnifFIHmuduxTWAA==",
+          "size": 2291200
+        },
+        {
+          "os": "windows",
+          "arch": "x86_64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/tencent-v0.1.0/oryxis-cloud-tencent-plugin-windows-x86_64.exe",
+          "sha256": "01eea248c3368237f5145ad80d9ccae12667825055a64784499cb8d5f42b93ee",
+          "signature": "gpytiNjl507Z+wZF1mnRIFQnthrtYnwux60VQanl/y09jffAAHstGQb46saXa1aBHomjhf+4/kSOOyH+uLPHBg==",
+          "size": 2498560
+        }
+      ]
+    }
+  ]
+}
