@@ -388,6 +388,16 @@ mod tests {
     }
 
     #[test]
+    fn a_hop_is_not_shown_the_targets_pinned_agent_key() {
+        let engine = SshEngine::new().with_pinned_agent_key(Some(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMX+sbLJm62mwGwiulf8TSu53yefXoMkpggOsXGbn0yj x",
+        ));
+        assert!(engine.pinned_agent_key.is_some());
+        assert!(engine.for_hop(None).pinned_agent_key.is_none());
+        assert!(engine.pinned_agent_key.is_some());
+    }
+
+    #[test]
     fn autofill_answers_otp_prompt() {
         let totp = test_totp();
         let answers =
