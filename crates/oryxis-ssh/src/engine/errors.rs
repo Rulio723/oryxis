@@ -109,6 +109,12 @@ pub enum ProxyCommandError {
         transport: String,
         stderr: Vec<String>,
     },
+
+    /// The proxy started talking before the SSH banner (a login it walks
+    /// the user through) and was still at it when the long ceiling for
+    /// that ran out (`dial_clock::PROXY_AUTH_CEILING`).
+    #[error("the command proxy was still logging in after {minutes} minutes")]
+    AuthTimedOut { minutes: u64 },
 }
 
 /// Render a proxy's last words onto the end of a transport failure.

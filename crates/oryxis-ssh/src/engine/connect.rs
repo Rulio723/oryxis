@@ -76,15 +76,22 @@ impl SshEngine {
                     })
             }
         };
-        tokio::time::timeout(connect_timeout, connect_fut)
-            .await
-            .map_err(|_| {
-                SshError::ConnectionFailed(format!(
-                    "{}: timed out after {}s",
-                    addr,
-                    connect_timeout.as_secs()
-                ))
-            })?
+        // Network time only: the clock stops while a person answers a
+        // host-key or command-proxy prompt, and while an attended command
+        // proxy talks through a login (`dial_clock`).
+        let clock = super::dial_clock::DialClock::new();
+        match clock.run(connect_timeout, connect_fut).await {
+            Ok(res) => res,
+            Err(super::dial_clock::DialTimeout::Network) => Err(SshError::ConnectionFailed(format!(
+                "{}: timed out after {}s",
+                addr,
+                connect_timeout.as_secs()
+            ))),
+            Err(super::dial_clock::DialTimeout::ProxyAuth) => Err(ProxyCommandError::AuthTimedOut {
+                minutes: super::dial_clock::PROXY_AUTH_CEILING.as_secs() / 60,
+            }
+            .into()),
+        }
     }
 
     pub async fn connect_with_resolver(
@@ -586,12 +593,16 @@ impl SshEngine {
             target_host: target_host.to_string(),
             target_port,
         };
-        if tx.send((query, resp_tx)).await.is_err() {
-            // The UI went away mid-dial. A dropped asker is not consent.
-            return Err(SshError::ProxyCommandNotApproved);
-        }
-        if !resp_rx.await.unwrap_or(false) {
-            return Err(SshError::ProxyCommandNotApproved);
+        {
+            // A person is deciding: the network timeout stops meanwhile.
+            let _hold = super::dial_clock::hold_current(super::dial_clock::HoldKind::Human);
+            if tx.send((query, resp_tx)).await.is_err() {
+                // The UI went away mid-dial. A dropped asker is not consent.
+                return Err(SshError::ProxyCommandNotApproved);
+            }
+            if !resp_rx.await.unwrap_or(false) {
+                return Err(SshError::ProxyCommandNotApproved);
+            }
         }
 
         let line = super::proxy_spawn::expand_proxy_tokens(cmd, dial)?;
@@ -601,14 +612,23 @@ impl SshEngine {
 
         // The proxy's own complaints are the only account of why a dial
         // through it failed; without them a bad profile or an expired
-        // token reads as an unexplained EOF in the version exchange.
+        // token reads as an unexplained EOF in the version exchange. The
+        // same sink hears what the proxy prints before the SSH banner,
+        // feeds the connect card while the dial is pending, and on an
+        // attended dial stops the clock while a login is under way.
+        let voice = super::proxy_spawn::ProxyStderr::for_dial(
+            self.proxy_output_tx.clone(),
+            super::dial_clock::DialClock::current(),
+            self.is_attended(),
+        );
         let stderr = match child.stderr.take() {
             Some(stderr) => super::proxy_spawn::watch_proxy_stderr(
                 stderr,
                 target_host.to_string(),
                 target_port,
+                voice,
             ),
-            None => Default::default(),
+            None => voice,
         };
 
         let stdin = child
@@ -620,7 +640,11 @@ impl SshEngine {
             .take()
             .ok_or_else(|| SshError::Proxy("ProxyCommand: no stdout".into()))?;
 
-        Ok((tokio::io::join(stdout, stdin), stderr))
+        // The transport owns the child (`kill_on_drop`): the proxy ends
+        // with the connection, or with the dial when it is cancelled.
+        let transport =
+            super::proxy_banner::ProxyTransport::new(stdout, stdin, child, stderr.clone());
+        Ok((transport, stderr))
     }
 
     /// Connect via jump hosts (SSH tunneling through bastion hosts).

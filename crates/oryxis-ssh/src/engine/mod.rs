@@ -16,6 +16,7 @@ mod agent;
 mod auth;
 mod builder;
 mod connect;
+mod dial_clock;
 mod errors;
 mod exec;
 mod forwarding;
@@ -23,6 +24,7 @@ mod handler;
 mod kbi;
 mod monitor_conn;
 mod net_quality;
+mod proxy_banner;
 mod proxy_consent;
 mod proxy_spawn;
 mod session;
@@ -216,6 +218,11 @@ pub struct SshEngine {
     /// Sink for pre-auth banners (RFC 4252 §5.4). See
     /// `ClientHandler::banner_tx`.
     banner_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// Where a command proxy's own output goes while the dial is pending
+    /// (its stderr, and whatever it prints before the SSH banner: login
+    /// instructions, a browser URL). `None` logs it only. See
+    /// `proxy_spawn::ProxyStderr`.
+    proxy_output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     /// The host's preferred agent identity (B3): the public key of the
     /// vault key this connection references. Agent auth offers a matching
     /// agent identity FIRST (then the rest, preserving the try-all
@@ -818,6 +825,44 @@ mod tests {
                 .collect(),
         ));
         assert!(approved.proxy_command(CMD, &dial).await.is_ok());
+    }
+
+    /// Issue #223, end to end through `proxy_command`: a proxy that talks
+    /// before the SSH banner (a credentials refresh, a login URL longer
+    /// than russh's 255-byte line) hands russh a stream that starts AT
+    /// the banner, and every word it said reaches the output channel.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_proxy_that_talks_before_the_banner_still_carries_the_dial() {
+        use tokio::io::AsyncReadExt;
+        const CMD: &str = "echo 'WARN Expired SSH credentials found. Will refresh...'; \
+             i=0; while [ $i -lt 30 ]; do printf 'https://sso.example/%0300d\\n' $i; i=$((i+1)); done; \
+             printf 'SSH-2.0-FakeServer\\r\\n'; exec sleep 5";
+        let dial = ProxyTokens {
+            host: "host.example",
+            port: 22,
+            user: "root",
+            name: "host.example",
+        };
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let engine = SshEngine::new()
+            .with_proxy_command_ask(trusted_only_proxy_command_ask(
+                [oryxis_core::models::connection::proxy_command_fingerprint(CMD)]
+                    .into_iter()
+                    .collect(),
+            ))
+            .with_proxy_output(out_tx);
+        let (mut stream, _voice) = engine.proxy_command(CMD, &dial).await.expect("spawn");
+        let mut banner = [0u8; 20];
+        stream.read_exact(&mut banner).await.expect("banner");
+        assert_eq!(&banner, b"SSH-2.0-FakeServer\r\n");
+        let mut heard = Vec::new();
+        while let Ok(line) = out_rx.try_recv() {
+            heard.push(line);
+        }
+        assert_eq!(heard.len(), 31, "{heard:?}");
+        assert!(heard[0].starts_with("WARN Expired"));
+        assert!(heard[1].starts_with("https://sso.example/") && heard[1].len() > 255);
     }
 
     #[test]

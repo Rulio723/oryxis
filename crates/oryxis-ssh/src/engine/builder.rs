@@ -38,6 +38,7 @@ impl SshEngine {
             auto_interactive_fallback: false,
             remote_routes: None,
             banner_tx: None,
+            proxy_output_tx: None,
             pinned_agent_key: None,
         }
     }
@@ -135,6 +136,27 @@ impl SshEngine {
     ) -> Self {
         self.banner_tx = Some(tx);
         self
+    }
+
+    /// Where a command proxy's own output goes while the dial is still
+    /// pending: its stderr and anything it prints before the SSH banner
+    /// (a proxy refreshing credentials prints its login instructions
+    /// there). Each line arrives as it is printed; the channel is dropped
+    /// once the banner arrives. Without it the lines are only logged.
+    pub fn with_proxy_output(mut self, tx: tokio::sync::mpsc::UnboundedSender<String>) -> Self {
+        self.proxy_output_tx = Some(tx);
+        self
+    }
+
+    /// Whether a person is watching this dial: the engine has a UI to ask
+    /// about host keys. Unattended engines (boot forwards, MCP, the
+    /// monitor dashboard, sync) are built without one and pass
+    /// `with_strict_host_key(true)` instead. Decides whether a command
+    /// proxy that starts talking before the SSH banner may stop the
+    /// connect clock for a login (`dial_clock`): with nobody there to
+    /// finish a browser login, it may not.
+    pub(crate) fn is_attended(&self) -> bool {
+        self.host_key_ask_tx.is_some()
     }
 
     pub fn with_strict_host_key(mut self, enabled: bool) -> Self {
@@ -425,6 +447,7 @@ impl SshEngine {
             strict_host_key: self.strict_host_key,
             remote_routes: self.remote_routes.clone(),
             banner_tx: self.banner_tx.clone(),
+            dial_clock: super::dial_clock::DialClock::current(),
         }
     }
 

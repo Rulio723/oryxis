@@ -34,6 +34,11 @@ pub(crate) struct ClientHandler {
     /// instructions) go so the UI can show them. `None` (headless
     /// callers: port forwards, MCP) logs and drops them.
     pub(crate) banner_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// The clock of the dial that built this handler. The host-key
+    /// prompt is answered by a person, and the connect timeout counts
+    /// network time only, so the wait for that answer stops it (see
+    /// `dial_clock`). `None` outside a dial.
+    pub(crate) dial_clock: Option<super::dial_clock::DialClock>,
 }
 
 impl ClientHandler {
@@ -54,6 +59,7 @@ impl ClientHandler {
             strict_host_key: false,
             remote_routes: None,
             banner_tx: None,
+            dial_clock: None,
         }
     }
 }
@@ -105,6 +111,12 @@ impl client::Handler for ClientHandler {
                         status,
                     };
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    // A person is reading a fingerprint: the network
+                    // timeout stops until they answer.
+                    let _hold = self
+                        .dial_clock
+                        .as_ref()
+                        .map(|c| c.hold(super::dial_clock::HoldKind::Human));
                     if tx.send((query, resp_tx)).await.is_err() {
                         return Ok(false);
                     }

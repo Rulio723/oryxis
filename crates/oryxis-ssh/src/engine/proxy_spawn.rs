@@ -234,11 +234,16 @@ fn shell_command(line: &str) -> TokioCommand {
 
 /// Spawn an expanded proxy line with its three pipes wired.
 ///
-/// The child is deliberately not `kill_on_drop`: `proxy_command` keeps
-/// the pipes and lets the `Child` go, and the proxy ends when the SSH
-/// session drops its end of stdin.
+/// `kill_on_drop`: the `Child` rides inside the transport
+/// (`proxy_banner::ProxyTransport`), so the proxy lives exactly as long
+/// as the connection that uses it. Closing stdin alone is not enough to
+/// end one: a proxy parked on a browser login never reads stdin, and a
+/// dial the user cancelled would otherwise leave it running with the
+/// login half done. OpenSSH does the same by hand (`SIGHUP` in
+/// `ssh_kill_proxy_command`).
 pub(crate) fn spawn_proxy_process(line: &str) -> std::io::Result<Child> {
     let mut cmd = shell_command(line);
+    cmd.kill_on_drop(true);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // Piped, not null. A command proxy fails for ordinary reasons,
@@ -252,14 +257,37 @@ pub(crate) fn spawn_proxy_process(line: &str) -> std::io::Result<Child> {
 
 /// A command proxy's own account of itself.
 ///
-/// Shared between the task draining its stderr and the dial that may
-/// have to explain a failure, because the two learn about that failure
-/// on different pipes: russh sees an EOF on stdout, and the sentence
-/// saying why is on the other one.
+/// Shared between the task draining its stderr, the pre-banner filter on
+/// its stdout, and the dial that may have to explain a failure, because
+/// the three learn about the proxy on different pipes: russh sees an EOF
+/// or a version error on stdout, and the sentence saying why is on the
+/// other one (or was printed on stdout BEFORE the banner, which is where
+/// `ossh` and friends put their login instructions, issue #223).
+///
+/// Until the SSH banner arrives it also does two live jobs: every line
+/// goes to the UI (`output`, the connect card), and on an ATTENDED dial
+/// the first line stops the dial clock under a proxy-auth hold, because
+/// a proxy that is talking before the banner is walking someone through
+/// a login and the network timeout is not the right bound for that.
 #[derive(Clone, Default)]
 pub(crate) struct ProxyStderr {
     tail: Arc<Mutex<VecDeque<String>>>,
     drain: Arc<Mutex<Option<JoinHandle<()>>>>,
+    live: Arc<Mutex<LivePhase>>,
+}
+
+/// What only matters until the SSH banner arrives.
+#[derive(Default)]
+struct LivePhase {
+    /// Where lines go while the dial is still pending (`None` once the
+    /// banner arrived, or on an engine with no UI).
+    output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// The dial clock and whether anyone is watching this dial.
+    clock: Option<super::dial_clock::DialClock>,
+    attended: bool,
+    /// Taken on the first line of an attended dial, dropped at the banner.
+    hold: Option<super::dial_clock::Hold>,
+    banner_seen: bool,
 }
 
 impl ProxyStderr {
@@ -274,12 +302,56 @@ impl ProxyStderr {
     /// is still alive and simply had nothing more to say.
     const SETTLE: Duration = Duration::from_millis(250);
 
+    /// A sink wired to the dial: `output` receives the proxy's lines until
+    /// the banner, and `clock` is stopped while an attended proxy talks.
+    pub(crate) fn for_dial(
+        output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        clock: Option<super::dial_clock::DialClock>,
+        attended: bool,
+    ) -> Self {
+        let sink = ProxyStderr::default();
+        {
+            let mut live = sink.live.lock().unwrap_or_else(|e| e.into_inner());
+            live.output = output;
+            live.clock = clock;
+            live.attended = attended;
+        }
+        sink
+    }
+
     fn push(&self, line: String) {
         let mut tail = self.tail.lock().unwrap_or_else(|e| e.into_inner());
         if tail.len() == Self::TAIL {
             tail.pop_front();
         }
         tail.push_back(line);
+    }
+
+    /// One line the proxy said, on either pipe.
+    pub(crate) fn heard(&self, line: String) {
+        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        if !live.banner_seen {
+            if let Some(tx) = &live.output {
+                let _ = tx.send(line.clone());
+            }
+            if live.attended
+                && live.hold.is_none()
+                && let Some(clock) = &live.clock
+            {
+                live.hold = Some(clock.hold(super::dial_clock::HoldKind::ProxyAuth));
+            }
+        }
+        drop(live);
+        self.push(line);
+    }
+
+    /// The SSH banner arrived: the login (if any) is over. Resumes the
+    /// dial clock and stops feeding the UI.
+    pub(crate) fn banner_arrived(&self) {
+        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        live.banner_seen = true;
+        live.hold = None;
+        live.output = None;
     }
 
     fn lines(&self) -> Vec<String> {
@@ -312,8 +384,8 @@ pub(crate) fn watch_proxy_stderr(
     stderr: tokio::process::ChildStderr,
     host: String,
     port: u16,
+    sink: ProxyStderr,
 ) -> ProxyStderr {
-    let sink = ProxyStderr::default();
     let handle = tokio::spawn(drain_proxy_stderr(stderr, host, port, sink.clone()));
     *sink.drain.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     sink
@@ -351,7 +423,7 @@ async fn drain_proxy_stderr(
         if line.trim().is_empty() {
             continue;
         }
-        sink.push(line.clone());
+        sink.heard(line.clone());
         if logged >= LOGGED_LINES {
             continue;
         }
@@ -594,7 +666,12 @@ mod tests {
         .expect("proxy spawn");
 
         let stderr = child.stderr.take().expect("stderr");
-        let sink = watch_proxy_stderr(stderr, "host.example".to_string(), 22);
+        let sink = watch_proxy_stderr(
+            stderr,
+            "host.example".to_string(),
+            22,
+            ProxyStderr::default(),
+        );
 
         let status = child.wait().await.expect("wait");
         assert!(status.success(), "the proxy died talking, status {status:?}");
