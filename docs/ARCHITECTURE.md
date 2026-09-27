@@ -26,7 +26,8 @@ that the app composes.
 +--------------------------------------------------------------------+
 | Cloud providers + plugin subsystem                                 |
 | oryxis-cloud              provider trait (discovery + transport)   |
-| oryxis-cloud-aws/-gcp/-azure/-aliyun/-tencent/-k8s    providers    |
+| oryxis-cloud-aws/-gcp/-azure/-k8s     providers                    |
+| oryxis-cloud-aliyun/-tencent          providers                    |
 | *-plugin                  subprocess binaries (JSON-RPC 2.0)       |
 | oryxis-plugin-protocol    stdio wire contract                      |
 | oryxis-plugin-signer      Ed25519 sign + SHA-256                   |

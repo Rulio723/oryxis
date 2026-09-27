@@ -7,21 +7,31 @@ project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- A multi-select mode in the host list toolbar: clicks pick cards instead of connecting, and the selection bar (pinned above the list) connects the batch one host at a time, moves it to a folder or removes it behind the usual confirmation; right-clicking a selected card offers the same actions (#230).
-- An `sz` download with "Ask where to save downloads" on starts receiving at once and moves the files to the folder you pick, so the dialog no longer has to beat the remote `sz` timeout (#230, requested by @ziyouwa).
-- Restored tabs can connect at launch, one after another and in place, and the app can open on the tab that was active, both under "Restore last session's tabs" in Settings > Interface (#229, requested by @nAnderYang).
-- Alibaba Cloud (ECS + ACK) and Tencent Cloud (CVM + TKE) cloud accounts, as on-demand plugins over the `aliyun` and `tccli` CLIs you already configured. ACK and TKE clusters add as Kubernetes accounts; their kubeconfig is stored per cluster under `~/.oryxis/kubeconfig/` and can be refreshed from the same row.
-- Settings > Sync installs the relay for you: pick a host from the vault, Oryxis connects over SSH, installs the signed `oryxis-relay` as a systemd service (TLS via Caddy optional) and adopts the endpoint, after showing every command it will run.
+- A multi-select mode in the host list toolbar: clicks pick cards instead of connecting (#234, by @shideqin).
+- The selection bar connects the picked hosts one at a time, moves them to a folder or removes them behind the usual confirmation (#234).
+- Hosts move between folders without opening the editor: "Move to group" on the card menu, or drag cards onto a folder or the back arrow (#230, requested by @ziyouwa).
+- A host imported from inside a folder lands in that folder, and the import dialogs say which one (#230).
+- Theme cards carry measured tags (dark, light, warm, high contrast...), and every theme picker has Dark / Light chips and a tag search (#230).
+- Restored tabs can connect at launch, one after another, and the app can open on the tab that was active (#229, requested by @nAnderYang).
+- Alibaba Cloud (ECS + ACK) and Tencent Cloud (CVM + TKE) accounts, as plugins over the `aliyun` and `tccli` CLIs you already configured.
+- ACK and TKE clusters add as Kubernetes accounts, with the kubeconfig stored per cluster under `~/.oryxis/kubeconfig/` and refreshable from the same row.
+- Settings > Sync installs the relay on a vault host over SSH, as a systemd service with optional Caddy TLS, after showing every command it will run.
 
 ### Changed
-- Ctrl + wheel zoom is a shortcut like any other: editable or removable in Settings > Shortcuts, with a "Zoom with Ctrl + wheel" switch beside the terminal font size (#225, requested by @411A).
-- A touchpad pinch zooms the terminal font on macOS and Wayland too, as the same shortcut, so the switch and a rebind cover it on every platform.
-- Zooming the terminal (Ctrl + wheel, Ctrl + = / -) lasts for the session: the Terminal Font Size stepper owns the preference, says when a zoom is in effect, and reset returns to it.
-- The relay wizard's systemd file now runs the service hardened (`ProtectSystem=strict`, `NoNewPrivileges`), and relay releases ship Ed25519-signed Linux binaries with a `relay.json` manifest.
+- An `sz` download honours "Ask where to save downloads", and starts receiving at once so the dialog no longer races the remote `sz` timeout (#230, requested by @ziyouwa).
+- The password popup reaches `sudo` / `su` prompts inside tmux and GNU screen (#232, requested by @anojoyman).
+- Ctrl + wheel zoom is a shortcut: rebind or remove it in Settings > Shortcuts, or use the switch beside the terminal font size (#225, requested by @411A).
+- A touchpad pinch zooms the terminal font on macOS and Wayland as the same shortcut.
+- A terminal zoom lasts for the session; the font size stepper keeps the preference and reset returns to it.
+- The relay's systemd unit runs hardened, and relay releases ship Ed25519-signed Linux binaries with a `relay.json` manifest.
 - The Sync host picker answers Esc and the keyboard like every other dialog.
+- The MCP plugin 0.1.4 serves requests concurrently, honours cancel and keeps one login per host (#227, reported by @Ing-Tek).
 
 ### Fixed
-- The tab bar keeps a drag handle in front of the `⋯` button, so the window can still be moved once the tabs fill the bar (#226, reported by @moliyadi).
+- The tab bar keeps a drag handle, so the window can still be moved once the tabs fill the bar (#226, reported by @moliyadi).
+- Pairing advertises the device name set in Settings instead of the generated one (#224, by @mediclab).
+- The sync passphrase edit has a reveal eye, and the recovery hint names what to check first (#228, by @shideqin).
+- The first-run features list no longer hides its toggles under the scrollbar (#231, reported by @Regsit).
 
 ## [0.18.0] - 2026-09-09
 
