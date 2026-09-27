@@ -9,7 +9,7 @@ mod tests {
     use oryxis_core::models::key::{KeyAlgorithm, SshKey};
     use oryxis_vault::VaultStore;
 
-    use crate::handlers::{dial_signature, reuse_signature};
+    use crate::handlers::{dial_signature, resolve_dial_plan, reuse_signature};
     use crate::server::Server;
     use crate::stdio;
     use crate::tools::tool_definitions;
@@ -29,6 +29,54 @@ mod tests {
         vault.set_master_password("test").unwrap();
         let _ = vault.set_setting("mcp_server_enabled", "true");
         vault
+    }
+
+    /// A host behind a bastion that sits behind another bastion dials
+    /// the whole route over MCP, the way a tab does: the chain is
+    /// expanded (issue #184), and every hop carries its own credentials,
+    /// not the target's. A bastion need not be exposed to MCP itself.
+    #[tokio::test]
+    async fn a_jump_route_is_resolved_with_each_hops_credentials() {
+        let vault = test_vault();
+        let outer = Connection::new("outer", "outer.example");
+        let mut inner = Connection::new("inner", "inner.example");
+        inner.jump_chain = vec![outer.id];
+        let mut target = Connection::new("target", "target.example");
+        target.jump_chain = vec![inner.id];
+        target.mcp_enabled = true;
+        vault.save_connection(&outer, Some("outer-pw")).unwrap();
+        vault.save_connection(&inner, Some("inner-pw")).unwrap();
+        vault.save_connection(&target, Some("target-pw")).unwrap();
+        vault.set_connection_totp_secret(&target.id, Some("JBSWY3DPEHPK3PXP")).unwrap();
+        vault.set_connection_totp_secret(&inner.id, Some("GEZDGNBVGY3TQOJQ")).unwrap();
+
+        let Ok(plan) = resolve_dial_plan(&vault, target.id) else {
+            panic!("the target is exposed to MCP and must resolve");
+        };
+        assert_eq!(plan.auth_conn.jump_chain, vec![outer.id, inner.id]);
+        assert_eq!(plan.password.as_deref(), Some("target-pw"));
+        let resolver = plan.resolver.expect("a routed host carries a resolver");
+        let hops: Vec<uuid::Uuid> = resolver.connections.iter().map(|c| c.id).collect();
+        assert_eq!(hops, vec![outer.id, inner.id]);
+        assert_eq!(resolver.passwords.get(&outer.id).map(String::as_str), Some("outer-pw"));
+        assert_eq!(resolver.passwords.get(&inner.id).map(String::as_str), Some("inner-pw"));
+        // Each hop carries its own second factor, and only its own: the
+        // target's secret never lands on a bastion.
+        assert_eq!(
+            resolver.totp_secrets.get(&inner.id).map(String::as_str),
+            Some("GEZDGNBVGY3TQOJQ")
+        );
+        assert!(!resolver.totp_secrets.contains_key(&outer.id));
+        assert!(!resolver.totp_secrets.values().any(|s| s == "JBSWY3DPEHPK3PXP"));
+
+        // A direct host needs no resolver at all.
+        let mut direct = Connection::new("direct", "direct.example");
+        direct.mcp_enabled = true;
+        vault.save_connection(&direct, None).unwrap();
+        let Ok(plan) = resolve_dial_plan(&vault, direct.id) else {
+            panic!("the direct host must resolve");
+        };
+        assert!(plan.resolver.is_none());
     }
 
     #[test]
@@ -349,15 +397,15 @@ mod tests {
         let conn = Connection::new("web", "10.0.0.1");
         let pins = vec![pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:aaa")];
         let none = HashSet::new();
-        let before = reuse_signature(&conn, &[], &pins, &none);
+        let before = reuse_signature(&conn, &[], &pins, &none, None);
 
         let mut other = pins.clone();
         other.push(pin("10.0.0.9", 22, "ssh-ed25519", "SHA256:zzz"));
-        assert_eq!(reuse_signature(&conn, &[], &other, &none), before);
+        assert_eq!(reuse_signature(&conn, &[], &other, &none, None), before);
 
-        assert_ne!(reuse_signature(&conn, &[], &[], &none), before, "pin removed");
+        assert_ne!(reuse_signature(&conn, &[], &[], &none, None), before, "pin removed");
         let changed = vec![pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:bbb")];
-        assert_ne!(reuse_signature(&conn, &[], &changed, &none), before, "pin replaced");
+        assert_ne!(reuse_signature(&conn, &[], &changed, &none, None), before, "pin replaced");
 
         let line = "ssh -W %h:%p bastion";
         let mut proxied = conn.clone();
@@ -370,9 +418,41 @@ mod tests {
         });
         let trusted: HashSet<String> = [proxy_command_fingerprint(line)].into();
         assert_ne!(
-            reuse_signature(&proxied, &[], &pins, &trusted),
-            reuse_signature(&proxied, &[], &pins, &none),
+            reuse_signature(&proxied, &[], &pins, &trusted, None),
+            reuse_signature(&proxied, &[], &pins, &none, None),
             "revoking the command proxy"
+        );
+    }
+
+    /// With a jump route the engine dials through the FIRST hop's proxy,
+    /// so revoking that hop's command line must withdraw the route too.
+    #[test]
+    fn reuse_signature_follows_the_first_hops_command_proxy() {
+        use oryxis_core::models::connection::{proxy_command_fingerprint, ProxyConfig, ProxyType};
+        use std::collections::HashSet;
+
+        let conn = Connection::new("db", "10.0.0.1");
+        let hops = [("bastion.example", 22u16)];
+        let line = "ssh -W %h:%p jumpbox";
+        let hop_proxy = ProxyConfig {
+            proxy_type: ProxyType::Command(line.into()),
+            host: String::new(),
+            port: 0,
+            username: None,
+            password: None,
+        };
+        let none = HashSet::new();
+        let trusted: HashSet<String> = [proxy_command_fingerprint(line)].into();
+        assert_ne!(
+            reuse_signature(&conn, &hops, &[], &trusted, Some(&hop_proxy)),
+            reuse_signature(&conn, &hops, &[], &none, Some(&hop_proxy)),
+            "revoking the first hop's command proxy"
+        );
+        // A route whose first hop has no command proxy is unaffected by
+        // the approval list.
+        assert_eq!(
+            reuse_signature(&conn, &hops, &[], &trusted, None),
+            reuse_signature(&conn, &hops, &[], &none, None),
         );
     }
 
@@ -389,13 +469,13 @@ mod tests {
             pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:aaa"),
             pin("bastion.example", 22, "ssh-ed25519", "SHA256:bbb"),
         ];
-        let before = reuse_signature(&conn, &hops, &pins, &none);
+        let before = reuse_signature(&conn, &hops, &pins, &none, None);
         let mut unrelated = pins.clone();
         unrelated.push(pin("elsewhere", 22, "ssh-ed25519", "SHA256:zzz"));
-        assert_eq!(reuse_signature(&conn, &hops, &unrelated, &none), before);
+        assert_eq!(reuse_signature(&conn, &hops, &unrelated, &none, None), before);
         let bastion_gone = vec![pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:aaa")];
         assert_ne!(
-            reuse_signature(&conn, &hops, &bastion_gone, &none),
+            reuse_signature(&conn, &hops, &bastion_gone, &none, None),
             before,
             "bastion pin removed"
         );
@@ -404,7 +484,7 @@ mod tests {
             pin("bastion.example", 22, "ssh-ed25519", "SHA256:ccc"),
         ];
         assert_ne!(
-            reuse_signature(&conn, &hops, &bastion_changed, &none),
+            reuse_signature(&conn, &hops, &bastion_changed, &none, None),
             before,
             "bastion pin replaced"
         );

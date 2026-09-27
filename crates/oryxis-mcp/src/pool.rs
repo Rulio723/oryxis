@@ -385,7 +385,12 @@ async fn dial(plan: &DialPlan) -> Result<MonitorConn, Box<PoolFailure>> {
         .as_deref()
         .map(|pem| KeyMaterial::new(pem, plan.certificate.as_deref()));
     plan.engine
-        .connect_monitor(&plan.auth_conn, plan.password.as_deref(), key_material, None)
+        .connect_monitor(
+            &plan.auth_conn,
+            plan.password.as_deref(),
+            key_material,
+            plan.resolver.as_ref(),
+        )
         .await
         .map_err(|error| {
             Box::new(PoolFailure {

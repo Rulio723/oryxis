@@ -171,6 +171,8 @@ pub struct DialPlan {
     pub password: Option<String>,
     pub private_key: Option<String>,
     pub certificate: Option<String>,
+    /// The jump route's hops, resolved (`None` for a direct host).
+    pub resolver: Option<oryxis_ssh::ConnectionResolver>,
     pub engine: SshEngine,
     /// [`reuse_signature`] of `auth_conn`, the pool's reuse key.
     pub signature: u64,
@@ -240,11 +242,18 @@ pub fn dial_signature(conn: &Connection) -> u64 {
 /// route as surely as one withdrawn from the target. (The chain's ids
 /// are already in [`dial_signature`]; this adds what each hop's key is
 /// trusted as.)
+///
+/// `first_hop_proxy` is the effective proxy of the route's FIRST hop,
+/// the one the engine actually dials through when there is a route (the
+/// target's own proxy is not used then). Its command-proxy approval
+/// counts the same way the target's does: revoking the line that reaches
+/// the bastion withdraws the route.
 pub fn reuse_signature(
     conn: &Connection,
     hops: &[(&str, u16)],
     pins: &[oryxis_core::models::known_host::KnownHost],
     trusted_proxy_commands: &std::collections::HashSet<String>,
+    first_hop_proxy: Option<&oryxis_core::models::connection::ProxyConfig>,
 ) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     dial_signature(conn).hash(&mut h);
@@ -261,44 +270,34 @@ pub fn reuse_signature(
     for (host, port) in hops {
         pins_of(host, *port).hash(&mut h);
     }
-    if let Some(oryxis_core::models::connection::ProxyConfig {
-        proxy_type: oryxis_core::models::connection::ProxyType::Command(cmd),
-        ..
-    }) = &conn.proxy
-    {
-        trusted_proxy_commands
-            .contains(&oryxis_core::models::connection::proxy_command_fingerprint(cmd))
-            .hash(&mut h);
-    }
+    let command_approval = |proxy: Option<&oryxis_core::models::connection::ProxyConfig>| {
+        match proxy.map(|p| &p.proxy_type) {
+            Some(oryxis_core::models::connection::ProxyType::Command(cmd)) => Some(
+                trusted_proxy_commands
+                    .contains(&oryxis_core::models::connection::proxy_command_fingerprint(cmd)),
+            ),
+            _ => None,
+        }
+    };
+    command_approval(conn.proxy.as_ref()).hash(&mut h);
+    command_approval(first_hop_proxy).hash(&mut h);
     h.finish()
 }
 
-/// Resolve the dial for `id`: the effective connection, its
-/// credentials and an engine configured for a headless caller. Sync,
-/// and the only part of `ssh_execute` that reads the vault.
-pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanError> {
-    let conns = vault
-        .list_mcp_connections()
-        .map_err(|e| PlanError::Other(e.to_string()))?;
-    let conn = conns
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or(PlanError::NotFound)?;
-
-    // Group inheritance (D4), the SAME collapse every app dial site
-    // applies (`VaultStore::apply_effective`): the effective proxy lands
-    // on `conn.proxy`, an inherited username / identity fills the empty
-    // fields. Skipping it here is how a headless dial once authenticated
-    // differently (as "root") than a tab to the very same host.
-    let groups = vault.list_groups().unwrap_or_default();
-    let identities = vault.list_identities().unwrap_or_default();
-    let mut conn = conn.clone();
-    vault.apply_effective(&mut conn, &groups, &identities);
-    let conn = &conn;
-
+/// A host's credentials as the app's `resolve_credentials` resolves
+/// them: the host's own password and key first, a linked identity's
+/// second, the disk key filling a still-empty key slot. Serves the
+/// target AND every hop of its route, because a bastion must not
+/// authenticate differently depending on whether it is dialled directly
+/// or on the way to another host.
+fn resolve_credentials(
+    vault: &VaultStore,
+    conn: &Connection,
+    identities: &[oryxis_core::models::Identity],
+    all_keys: &[oryxis_core::models::SshKey],
+) -> (Option<String>, Option<String>, Option<String>) {
     // The certificate (B2) is resolved from the SAME key as the pem, so
     // it can never pair with the wrong key.
-    let all_keys = vault.list_keys().unwrap_or_default();
     let cert_for = |kid: &uuid::Uuid| -> Option<String> {
         all_keys
             .iter()
@@ -355,6 +354,35 @@ pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanE
         }
         None => (None, final_cert),
     };
+    (final_password, final_key, final_cert)
+}
+
+/// Resolve the dial for `id`: the effective connection, its
+/// credentials and an engine configured for a headless caller. Sync,
+/// and the only part of `ssh_execute` that reads the vault.
+pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanError> {
+    let conns = vault
+        .list_mcp_connections()
+        .map_err(|e| PlanError::Other(e.to_string()))?;
+    let conn = conns
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or(PlanError::NotFound)?;
+
+    // Group inheritance (D4), the SAME collapse every app dial site
+    // applies (`VaultStore::apply_effective`): the effective proxy lands
+    // on `conn.proxy`, an inherited username / identity fills the empty
+    // fields. Skipping it here is how a headless dial once authenticated
+    // differently (as "root") than a tab to the very same host.
+    let groups = vault.list_groups().unwrap_or_default();
+    let identities = vault.list_identities().unwrap_or_default();
+    let mut conn = conn.clone();
+    vault.apply_effective(&mut conn, &groups, &identities);
+    let conn = &conn;
+
+    let all_keys = vault.list_keys().unwrap_or_default();
+    let (final_password, final_key, final_cert) =
+        resolve_credentials(vault, conn, &identities, &all_keys);
     let username = conn.username.clone().unwrap_or_else(|| "root".into());
 
     // Build a temporary Connection with resolved username for auth. The
@@ -363,6 +391,62 @@ pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanE
     // group-inherited proxy with the host's own).
     let mut auth_conn = conn.clone();
     auth_conn.username = Some(username);
+
+    // The route, nested hops expanded the way the app expands it
+    // (`oryxis_core::jump_route`), and each hop resolved like a host of
+    // its own: group inheritance, credentials, the effective proxy.
+    // Hops are looked up among ALL hosts, not only the ones exposed to
+    // MCP: a bastion is part of the route whether or not it is itself a
+    // tool target. A dangling id stays in the route for the engine to
+    // report as "jump host not found".
+    let all_hosts = if auth_conn.jump_chain.is_empty() {
+        Vec::new()
+    } else {
+        vault.list_connections().unwrap_or_default()
+    };
+    let resolver = if auth_conn.jump_chain.is_empty() {
+        None
+    } else {
+        auth_conn.jump_chain = oryxis_core::jump_route::expanded_jump_chain(
+            auth_conn.id,
+            &auth_conn.jump_chain,
+            &all_hosts,
+        );
+        let mut resolver = oryxis_ssh::ConnectionResolver {
+            connections: Vec::with_capacity(auth_conn.jump_chain.len()),
+            passwords: Default::default(),
+            private_keys: Default::default(),
+            certificates: Default::default(),
+            proxies: Default::default(),
+            totp_secrets: Default::default(),
+        };
+        for jid in &auth_conn.jump_chain {
+            let Some(hop) = all_hosts.iter().find(|c| c.id == *jid) else {
+                continue;
+            };
+            let mut hop = hop.clone();
+            vault.apply_effective(&mut hop, &groups, &identities);
+            let (pw, pk, cert) = resolve_credentials(vault, &hop, &identities, &all_keys);
+            if let Some(pw) = pw {
+                resolver.passwords.insert(*jid, pw);
+            }
+            if let Some(pk) = pk {
+                resolver.private_keys.insert(*jid, pk);
+            }
+            if let Some(cert) = cert {
+                resolver.certificates.insert(*jid, cert);
+            }
+            if let Some(proxy) = hop.proxy.clone() {
+                resolver.proxies.insert(*jid, proxy);
+            }
+            // The hop's own second factor; the target's never reaches it.
+            if let Some(secret) = vault.get_connection_totp_secret(jid).ok().flatten() {
+                resolver.totp_secrets.insert(*jid, secret);
+            }
+            resolver.connections.push(hop);
+        }
+        Some(resolver)
+    };
 
     // Build the engine. Honor any per-host legacy-algorithm overrides
     // the user pinned in the app (MCP is headless, so there is no
@@ -398,19 +482,12 @@ pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanE
         .list_trusted_proxy_commands()
         .map(|list| list.into_iter().map(|t| t.fingerprint).collect())
         .unwrap_or_default();
-    // Each hop's endpoint. Looked up among ALL hosts, not only the ones
-    // exposed to MCP: a bastion is part of the route whether or not it
-    // is itself a tool target. A dangling id has no endpoint and no pin
-    // to follow.
-    let hop_hosts = if auth_conn.jump_chain.is_empty() {
-        Vec::new()
-    } else {
-        vault.list_connections().unwrap_or_default()
-    };
+    // Each hop's endpoint, along the expanded route. A dangling id has
+    // no endpoint and no pin to follow.
     let hops: Vec<(&str, u16)> = auth_conn
         .jump_chain
         .iter()
-        .filter_map(|id| hop_hosts.iter().find(|c| c.id == *id))
+        .filter_map(|id| all_hosts.iter().find(|c| c.id == *id))
         .map(|c| (c.hostname.as_str(), c.port))
         .collect();
     let signature = reuse_signature(
@@ -418,6 +495,10 @@ pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanE
         &hops,
         &vault.list_known_hosts().unwrap_or_default(),
         &trusted_proxy_commands,
+        auth_conn
+            .jump_chain
+            .first()
+            .and_then(|first| resolver.as_ref()?.proxies.get(first)),
     );
     let engine = SshEngine::new()
         // Verify the server key against the vault's pins and reject
@@ -458,6 +539,7 @@ pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanE
         password: final_password,
         private_key: final_key,
         certificate: final_cert,
+        resolver,
         engine,
     })
 }
