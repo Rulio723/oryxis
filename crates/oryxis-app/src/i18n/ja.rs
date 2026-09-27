@@ -2432,6 +2432,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "アカウントを保存する前に保管庫がロックされたため、ダウンロードした kubeconfig は破棄されました。ロックを解除して再試行してください。",
         "password_suggest_title_for" => "{target} のパスワード",
         "zmodem_orphans_busy" => "同じフォルダーにダウンロードを受信中のため、何も移動しませんでした。待機中のファイルはそのまま残り、次回の起動時に再度提示されます。",
+        "selection_hidden" => "{n} 件が検索で非表示",
 _ => return None,
     })
 }

@@ -2431,6 +2431,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "la bóveda se bloqueó antes de poder guardar la cuenta, así que el kubeconfig descargado se descartó. Desbloquéala e inténtalo de nuevo.",
         "password_suggest_title_for" => "Contraseña de {target}",
         "zmodem_orphans_busy" => "Se está recibiendo una descarga en la misma carpeta, así que no se movió nada. Los archivos pendientes siguen allí y se ofrecerán de nuevo en el próximo inicio.",
+        "selection_hidden" => "{n} ocultos por la búsqueda",
 _ => return None,
     })
 }

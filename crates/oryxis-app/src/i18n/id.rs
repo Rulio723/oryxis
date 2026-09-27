@@ -2464,6 +2464,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "brankas terkunci sebelum akun dapat disimpan, jadi kubeconfig yang diunduh dibuang. Buka kunci lalu coba lagi.",
         "password_suggest_title_for" => "Kata sandi untuk {target}",
         "zmodem_orphans_busy" => "Sebuah unduhan sedang diterima ke folder yang sama, jadi tidak ada yang dipindahkan. Berkas yang menunggu tetap di sana dan akan ditawarkan lagi saat aplikasi dibuka berikutnya.",
+        "selection_hidden" => "{n} disembunyikan oleh pencarian",
 _ => return None,
     })
 }

@@ -2468,6 +2468,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "trezor se zamkl dřív, než šlo účet uložit, takže stažený kubeconfig byl zahozen. Odemkněte a zkuste to znovu.",
         "password_suggest_title_for" => "Heslo pro {target}",
         "zmodem_orphans_busy" => "Do stejné složky se právě přijímá stahování, proto se nic nepřesunulo. Čekající soubory tam zůstávají a budou znovu nabídnuty při příštím spuštění.",
+        "selection_hidden" => "{n} skryto vyhledáváním",
 _ => return None,
     })
 }

@@ -2464,6 +2464,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "계정을 저장하기 전에 보관함이 잠겨 다운로드한 kubeconfig를 폐기했습니다. 잠금을 해제하고 다시 시도하세요.",
         "password_suggest_title_for" => "{target}의 비밀번호",
         "zmodem_orphans_busy" => "같은 폴더로 다운로드를 받는 중이라 아무것도 옮기지 않았습니다. 대기 중인 파일은 그대로 남아 있으며 다음 실행 때 다시 제안됩니다.",
+        "selection_hidden" => "검색으로 {n}개 숨겨짐",
 _ => return None,
     })
 }

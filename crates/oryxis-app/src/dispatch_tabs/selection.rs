@@ -252,11 +252,17 @@ impl Oryxis {
         // Compared field by field against the live inputs first: this
         // runs after every update (each PTY batch included), and building
         // a scope allocates the search and the tag list.
+        //
+        // The search is part of the scope OUTSIDE the multi-select mode
+        // only. Inside it the user is deliberately building a selection,
+        // and "search web, pick three, search db, pick two" is how a
+        // selection spanning the list gets built; the verbs then act on
+        // every selected host and the bar says how many the search hides.
         let current = &self.dash_selection.scope;
         if current.group == self.active_group
             && current.view_mode == self.prefs.host_view_mode
             && current.cloud_profile == self.host_filter_cloud_profile
-            && current.search == self.host_search.trim()
+            && (self.dash_multi_select || current.search == self.host_search.trim())
             && current.tags == self.host_filter_tags
         {
             return;
@@ -273,11 +279,41 @@ impl Oryxis {
     /// the same hosts and land in the order the eye reads them. In Tree
     /// mode that is the tree walk's order, nested folders included.
     pub(crate) fn selected_hosts_in_view_order(&self) -> Vec<Uuid> {
-        self.dashboard_visible_host_order()
+        let mut out: Vec<Uuid> = self
+            .dashboard_visible_host_order()
             .into_iter()
             .map(|i| self.connections[i].id)
             .filter(|id| self.dash_selection.contains(*id))
-            .collect()
+            .collect();
+        // In the multi-select mode the selection survives a search (see
+        // `rescope_dash_selection`), so the hosts the current search
+        // hides are still selected and still acted on: they follow the
+        // visible ones, in the order they were picked.
+        if self.dash_multi_select {
+            let hidden: Vec<Uuid> = self
+                .dash_selection
+                .ids
+                .iter()
+                .copied()
+                .filter(|id| !out.contains(id) && self.connections.iter().any(|c| c.id == *id))
+                .collect();
+            out.extend(hidden);
+        }
+        out
+    }
+
+    /// How many selected hosts the current view does not show (the
+    /// multi-select mode keeps them across a search). Zero outside it.
+    pub(crate) fn selected_hosts_hidden(&self) -> usize {
+        if !self.dash_multi_select {
+            return 0;
+        }
+        let visible = self
+            .dashboard_visible_host_order()
+            .into_iter()
+            .filter(|&i| self.dash_selection.contains(self.connections[i].id))
+            .count();
+        self.selected_hosts_in_view_order().len().saturating_sub(visible)
     }
 
     /// The confirmation body for a batch removal: the hosts' labels while

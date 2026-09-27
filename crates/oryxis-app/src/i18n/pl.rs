@@ -2463,6 +2463,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "sejf został zablokowany przed zapisaniem konta, więc pobrany kubeconfig został odrzucony. Odblokuj i spróbuj ponownie.",
         "password_suggest_title_for" => "Hasło dla {target}",
         "zmodem_orphans_busy" => "Do tego samego folderu odbierane jest pobieranie, więc nic nie zostało przeniesione. Oczekujące pliki zostają tam i zostaną zaproponowane ponownie przy następnym uruchomieniu.",
+        "selection_hidden" => "{n} ukrytych przez wyszukiwanie",
 _ => return None,
     })
 }

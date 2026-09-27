@@ -2469,6 +2469,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "खाता सहेजे जाने से पहले वॉल्ट लॉक हो गया, इसलिए डाउनलोड किया गया kubeconfig हटा दिया गया। अनलॉक करें और फिर से कोशिश करें।",
         "password_suggest_title_for" => "{target} का पासवर्ड",
         "zmodem_orphans_busy" => "उसी फ़ोल्डर में एक डाउनलोड प्राप्त हो रहा है, इसलिए कुछ भी नहीं ले जाया गया। प्रतीक्षारत फ़ाइलें वहीं रहती हैं और अगली बार खोलने पर फिर से पेश की जाएँगी।",
+        "selection_hidden" => "{n} खोज द्वारा छिपे",
 _ => return None,
     })
 }

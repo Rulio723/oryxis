@@ -2431,6 +2431,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "il vault si è bloccato prima che l'account potesse essere salvato, quindi il kubeconfig scaricato è stato scartato. Sblocca e riprova.",
         "password_suggest_title_for" => "Password di {target}",
         "zmodem_orphans_busy" => "Un download è in ricezione nella stessa cartella, quindi non è stato spostato nulla. I file in attesa restano lì e verranno proposti di nuovo al prossimo avvio.",
+        "selection_hidden" => "{n} nascosti dalla ricerca",
 _ => return None,
     })
 }

@@ -2451,6 +2451,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "گاوصندوق پیش از ذخیره حساب قفل شد، بنابراین kubeconfig دریافت‌شده کنار گذاشته شد. قفل را باز کنید و دوباره تلاش کنید.",
         "password_suggest_title_for" => "رمز عبور {target}",
         "zmodem_orphans_busy" => "یک دانلود در حال دریافت در همان پوشه است، بنابراین چیزی جابه‌جا نشد. فایل‌های منتظر همان‌جا می‌مانند و در اجرای بعدی دوباره پیشنهاد می‌شوند.",
+        "selection_hidden" => "{n} مورد با جستجو پنهان شده",
 _ => return None,
     })
 }

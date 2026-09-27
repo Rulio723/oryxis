@@ -118,12 +118,32 @@ settle 400
 absent "Remove?"
 expect "2 selected"
 
+# Inside the mode a search narrows the grid but not the selection: a
+# selection spanning the list is built one search at a time, and the
+# bar says how many picked hosts the search is hiding, so a batch never
+# acts on something off screen without the bar saying so.
+click #search-dashboard
+type "cache"
+settle 300
+expect "2 selected"
+expect "2 hidden by the search"
+click "cache01"
+settle 300
+expect "3 selected"
+expect "2 hidden by the search"
+click #search-dashboard
+type ctrl+a
+type backspace
+settle 300
+expect "3 selected"
+absent "hidden by the search"
+
 # Leaving the mode hands the cards back to click-connects, and the
 # selection goes with it - a bar left over hosts that no longer read as
 # chosen would be the mode lying about what a click does.
 click (1212.00, 121.00)
 settle 400
-absent "2 selected"
+absent "3 selected"
 absent "Select all"
 
 # Batch connect dials ONE host at a time (the host-key, 2FA and

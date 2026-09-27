@@ -585,6 +585,24 @@ impl Oryxis {
                 .into(),
         ])
         .align_y(iced::Alignment::Center);
+        // Hosts the search hides but the selection still holds (the
+        // multi-select mode keeps them): said next to the count, so a
+        // batch never acts on something the user cannot see without
+        // being told.
+        let hidden = self.selected_hosts_hidden();
+        let count = if hidden > 0 {
+            dir_row(vec![
+                count.into(),
+                Space::new().width(8).into(),
+                text(t("selection_hidden").replace("{n}", &hidden.to_string()))
+                    .size(12)
+                    .color(OryxisColors::t().text_muted)
+                    .into(),
+            ])
+        } else {
+            count
+        }
+        .align_y(iced::Alignment::Center);
         // The row reads left to right as: WHICH hosts (the two that build
         // the selection), then what to DO with them, then the one that
         // cannot be undone. The gaps are all the same width - the order

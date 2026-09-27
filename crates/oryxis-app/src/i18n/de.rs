@@ -2431,6 +2431,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "der Tresor wurde gesperrt, bevor das Konto gespeichert werden konnte, daher wurde die heruntergeladene kubeconfig verworfen. Entsperren und erneut versuchen.",
         "password_suggest_title_for" => "Passwort für {target}",
         "zmodem_orphans_busy" => "In denselben Ordner wird gerade ein Download empfangen, daher wurde nichts verschoben. Die wartenden Dateien bleiben dort und werden beim nächsten Start erneut angeboten.",
+        "selection_hidden" => "{n} durch die Suche ausgeblendet",
 _ => return None,
     })
 }
