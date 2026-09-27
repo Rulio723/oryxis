@@ -2171,8 +2171,9 @@ impl SftpClient {
         self.exec_inner(command, None).await
     }
 
-    /// [`Self::exec`] with a bound on how long the command may run. A
-    /// command that outlives `limit` closes its channel on the way out
+    /// [`Self::exec`] with a bound on how long the whole call may take,
+    /// channel open and exec request included. A command that outlives
+    /// `limit` closes its channel on the way out
     /// (the connection stays usable) and answers
     /// [`SshError::ExecTimeout`], which a caller must read as "may
     /// already have acted", never as a dead link to retry over.
@@ -2189,11 +2190,18 @@ impl SftpClient {
         command: &str,
         limit: Option<std::time::Duration>,
     ) -> Result<(u32, String, String), SshError> {
+        // One deadline for the whole call, open included: a link that
+        // died after the last exchange leaves `channel_open_session`
+        // waiting on a reply that is not coming until the keepalive
+        // notices, which is exactly the hang a bounded call exists to
+        // cut. The open and the exec request share the budget with the
+        // run, so `limit` is the most the caller ever waits.
+        let deadline = limit.map(|l| (tokio::time::Instant::now() + l, l));
         // The handle lock covers the OPEN only: a channel is independent
         // of the guard once granted, and holding it for the whole run
         // would stall every other channel open on this connection behind
         // one slow command.
-        let mut channel = {
+        let open = async {
             let handle = self.handle.lock().await;
             let channel = handle
                 .channel_open_session()
@@ -2203,7 +2211,17 @@ impl SftpClient {
                 .exec(true, command)
                 .await
                 .map_err(|e| SshError::Channel(format!("exec({command}): {e}")))?;
-            channel
+            Ok::<_, SshError>(channel)
+        };
+        let mut channel = match deadline {
+            None => open.await?,
+            // Elapsing here reads the same as elapsing during the run:
+            // the exec request may already have reached the host, so the
+            // caller must still treat the command as possibly started.
+            Some((at, limit)) => match tokio::time::timeout_at(at, open).await {
+                Ok(channel) => channel?,
+                Err(_) => return Err(SshError::ExecTimeout(limit.as_secs())),
+            },
         };
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -2225,10 +2243,10 @@ impl SftpClient {
                 }
             }
         };
-        match limit {
+        match deadline {
             None => collect.await,
-            Some(limit) => {
-                if tokio::time::timeout(limit, collect).await.is_err() {
+            Some((at, limit)) => {
+                if tokio::time::timeout_at(at, collect).await.is_err() {
                     let _ = channel.close().await;
                     return Err(SshError::ExecTimeout(limit.as_secs()));
                 }

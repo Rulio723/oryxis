@@ -264,6 +264,11 @@ fn attrs_with_size(id: u32, size: u64) -> Attrs {
 struct SshHarness {
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     fs: SharedFs,
+    /// Once set, a session channel open is never answered: the reply is
+    /// parked here instead, which is what a link that died after the
+    /// last exchange looks like to the client (no accept, no refusal).
+    stall_opens: Arc<std::sync::atomic::AtomicBool>,
+    parked: Vec<russh::server::ChannelOpenHandle>,
 }
 
 impl russh::server::Handler for SshHarness {
@@ -283,6 +288,10 @@ impl russh::server::Handler for SshHarness {
         reply: russh::server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), russh::Error> {
+        if self.stall_opens.load(std::sync::atomic::Ordering::SeqCst) {
+            self.parked.push(reply);
+            return Ok(());
+        }
         reply.accept().await;
         self.channels.lock().await.insert(channel.id(), channel);
         Ok(())
@@ -322,6 +331,14 @@ impl russh::server::Handler for SshHarness {
 /// Stand up the in-process server and return a connected [`SftpClient`]
 /// plus a handle to the server's filesystem (for seeding / inspecting).
 async fn connect_in_memory() -> (SftpClient, SharedFs) {
+    let (client, fs, _) = connect_in_memory_stallable().await;
+    (client, fs)
+}
+
+/// [`connect_in_memory`], plus the switch that makes the server stop
+/// answering new session channel opens (the sftp channel is already
+/// open by then, so the client stays usable for everything else).
+async fn connect_in_memory_stallable() -> (SftpClient, SharedFs, Arc<std::sync::atomic::AtomicBool>) {
     use russh::keys::PrivateKey;
 
     let fs: SharedFs = Arc::new(Mutex::new(Fs::default()));
@@ -334,9 +351,12 @@ async fn connect_in_memory() -> (SftpClient, SharedFs) {
     let host_key = PrivateKey::from_openssh(HARNESS_HOST_KEY).expect("parse host key");
     server_config.keys.push(host_key);
     let server_config = Arc::new(server_config);
+    let stall_opens = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let server_handler = SshHarness {
         channels: Arc::new(Mutex::new(HashMap::new())),
         fs: fs.clone(),
+        stall_opens: stall_opens.clone(),
+        parked: Vec::new(),
     };
     tokio::spawn(async move {
         if let Ok(running) =
@@ -373,7 +393,7 @@ async fn connect_in_memory() -> (SftpClient, SharedFs) {
             .expect("SftpSession::new")
     };
     let client = SftpClient::new(session, shared, timeout);
-    (client, fs)
+    (client, fs, stall_opens)
 }
 
 // ---------------------------------------------------------------------------
@@ -970,4 +990,26 @@ async fn harness_upload_temp_name_claims_the_target_at_the_end() {
     );
     drop(guard);
     let _ = std::fs::remove_file(&src);
+}
+
+/// `exec_timeout` bounds the whole call, the channel OPEN included: a
+/// server that never answers the open (a link that died after the last
+/// exchange) must not hang the caller until a keepalive notices.
+#[tokio::test]
+async fn harness_exec_timeout_bounds_an_unanswered_channel_open() {
+    let (client, _fs, stall_opens) = connect_in_memory_stallable().await;
+    stall_opens.store(true, std::sync::atomic::Ordering::SeqCst);
+    let limit = std::time::Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client.exec_timeout("true", limit),
+    )
+    .await
+    .expect("exec_timeout must not outlive its own limit");
+    assert!(
+        matches!(outcome, Err(crate::SshError::ExecTimeout(_))),
+        "an unanswered open reads as a timeout"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }

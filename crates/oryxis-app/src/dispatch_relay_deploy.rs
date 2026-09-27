@@ -12,8 +12,13 @@
 //! 2. **Consent.** `Modal::RelayDeployConfirm` shows the plan's script
 //!    verbatim. Cancel is the default row; nothing below runs until the
 //!    user clicks Run.
-//! 3. **Run.** Upload the binary and the step scripts into a 0700
-//!    staging dir over SFTP, check the binary's SHA-256 on the host,
+//! 3. **Run.** Sweep the stale staging dirs earlier runs of this login
+//!    user left behind (an ABORTED run stops before its own cleanup, and
+//!    its dir holds the step scripts, the token-file writer included:
+//!    `stale_staging_sweep_command`, unprivileged, our name shape only,
+//!    older than any live run), then upload the binary and the step
+//!    scripts into a fresh 0700 staging dir over SFTP, check the
+//!    binary's SHA-256 on the host,
 //!    run each step (`sudo -n sh <file>` or bare root, each bounded by
 //!    `STEP_TIMEOUT`), remove the staging dir, GET `/healthz` on the
 //!    PUBLIC endpoint from this device (retried with backoff up to
@@ -657,6 +662,15 @@ where
             .replace("{bytes}", &verified.bytes.len().to_string())),
     )
     .await;
+    // Leftovers of earlier runs of this login user first (an aborted run
+    // never reaches its own cleanup), never this run's dir and never one
+    // a concurrent run could still own. Best effort, bounded, ignored.
+    let _ = client
+        .exec_timeout(
+            &relay_deploy::stale_staging_sweep_command(staging),
+            relay_deploy::PROBE_TIMEOUT,
+        )
+        .await;
     if let Err(e) = client.create_dir(staging).await {
         say(RelayDeployStep::Upload, Err(e.to_string())).await;
         return Err(step_failed(RelayDeployStep::Upload));

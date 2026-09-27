@@ -491,6 +491,7 @@ impl DeployPlan {
                     "set -eu\n\
                      restore() {{\n\
                      cat {CADDYFILE_BACKUP} > {CADDYFILE}\n\
+                     rm -f {CADDYFILE}.oryxis-new\n\
                      echo \"$1; the previous Caddyfile was restored\" >&2\n\
                      exit 1\n\
                      }}\n\
@@ -502,7 +503,7 @@ impl DeployPlan {
                      {block}\
                      ORYXIS_EOF\n\
                      printf '%s\\n' '{CADDY_END}' >> {CADDYFILE}.oryxis-new\n\
-                     cat {CADDYFILE}.oryxis-new > {CADDYFILE}\n\
+                     cat {CADDYFILE}.oryxis-new > {CADDYFILE} || restore \"the Caddyfile could not be written\"\n\
                      rm -f {CADDYFILE}.oryxis-new\n\
                      if ! caddy validate --adapter caddyfile --config {CADDYFILE}; then\n\
                      restore \"caddy rejected the configuration (is {site} defined elsewhere in {CADDYFILE}?)\"\n\
@@ -596,7 +597,39 @@ pub(crate) fn mask_token(text: &str, token: &str) -> String {
 /// because it appears in every log line.
 pub(crate) fn fresh_staging_dir() -> String {
     let id = uuid::Uuid::new_v4().simple().to_string();
-    format!("/tmp/oryxis-relay-{}", &id[..8])
+    format!("{STAGING_PREFIX}{}", &id[..8])
+}
+
+/// Every staging dir is `<this><8 hex>`, which is what lets a later run
+/// recognise the ones an earlier run left behind.
+pub(crate) const STAGING_PREFIX: &str = "/tmp/oryxis-relay-";
+
+/// How old a leftover staging dir must be before a run sweeps it. Far
+/// above the longest a run can hold one (the upload, then four steps of
+/// at most `STEP_TIMEOUT` each), so a deploy another device is running
+/// on the same host at the same moment is never swept from under it.
+pub(crate) const STALE_STAGING_MINUTES: u32 = 120;
+
+/// The command a run starts with: remove the staging dirs earlier runs
+/// of THIS login user left behind (an aborted run stops before its own
+/// cleanup, and the dir holds the step scripts, the one that writes the
+/// token file included). Runs unprivileged, so it can only ever reach
+/// the login user's own files, and matches only our exact name shape,
+/// only dirs owned by that user, only past [`STALE_STAGING_MINUTES`].
+/// `keep` (the dir this run is about to create) is excluded outright.
+/// Best effort: a sweep that fails changes nothing about the install.
+///
+/// It runs at the start of a run rather than in the probe because the
+/// probe is read-only on the host, and it is housekeeping of the same
+/// class as the run's own `cleanup`, never a step of the install.
+pub(crate) fn stale_staging_sweep_command(keep: &str) -> String {
+    let dir = STAGING_PREFIX.rsplit_once('/').map(|(d, _)| d).unwrap_or("/tmp");
+    let name = STAGING_PREFIX.rsplit_once('/').map(|(_, n)| n).unwrap_or(STAGING_PREFIX);
+    let keep = keep.replace('\'', "'\\''");
+    format!(
+        "find {dir} -maxdepth 1 -type d -name '{name}????????' -user \"$(id -u)\" \
+         -mmin +{STALE_STAGING_MINUTES} ! -path '{keep}' -exec rm -rf {{}} \\; 2>/dev/null; true"
+    )
 }
 
 /// The Caddyfile site address for a public `https://` endpoint: the
@@ -723,6 +756,55 @@ pub(crate) fn http_endpoint(hostname: &str, port: u16) -> Option<(String, bool)>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_staging_sweep_reaches_only_our_stale_dirs() {
+        let cmd = super::stale_staging_sweep_command("/tmp/oryxis-relay-deadbeef");
+        // Our exact name shape (8 hex chars), in /tmp only, owned by the
+        // login user, and old enough that no live run can own it.
+        assert!(cmd.starts_with("find /tmp -maxdepth 1 -type d -name 'oryxis-relay-????????'"));
+        assert!(cmd.contains("-user \"$(id -u)\""));
+        assert!(cmd.contains(&format!("-mmin +{}", super::STALE_STAGING_MINUTES)));
+        // The run's own dir is never a candidate.
+        assert!(cmd.contains("! -path '/tmp/oryxis-relay-deadbeef'"));
+        // Best effort: never fails the run, never runs through sudo.
+        assert!(cmd.ends_with("; true"));
+        assert!(!cmd.contains("sudo"));
+        assert!(super::fresh_staging_dir().starts_with(super::STAGING_PREFIX));
+    }
+
+    /// Run the sweep for real against a scratch tree standing in for
+    /// /tmp: a stale dir of ours goes, a fresh one, a foreign name and
+    /// the kept dir stay.
+    #[cfg(unix)]
+    #[test]
+    fn the_staging_sweep_runs_as_rendered() {
+        let root = std::env::temp_dir().join(format!("oryxis-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mk = |name: &str| {
+            let p = root.join(name);
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        };
+        let stale = mk("oryxis-relay-aaaaaaaa");
+        let fresh = mk("oryxis-relay-bbbbbbbb");
+        let kept = mk("oryxis-relay-cccccccc");
+        let foreign = mk("oryxis-relay-notours-x");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 3600);
+        for p in [&stale, &kept, &foreign] {
+            std::fs::File::open(p).unwrap().set_modified(old).unwrap();
+        }
+        let cmd = super::stale_staging_sweep_command(&kept.to_string_lossy())
+            .replacen("find /tmp ", &format!("find {} ", root.display()), 1);
+        let status = std::process::Command::new("sh").arg("-c").arg(&cmd).status().unwrap();
+        assert!(status.success());
+        assert!(!stale.exists(), "a stale dir of ours is swept");
+        assert!(fresh.exists(), "a dir a live run could own stays");
+        assert!(kept.exists(), "the run's own dir stays");
+        assert!(foreign.exists(), "another name shape stays");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::*;
 
     fn probe_output(priv_: &str) -> String {
@@ -858,6 +940,9 @@ mod tests {
         assert!(caddy.contains(CADDY_BEGIN) && caddy.contains(CADDY_END));
         assert!(caddy.contains(&format!("caddy validate --adapter caddyfile --config {CADDYFILE}")));
         assert!(caddy.contains("systemctl reload caddy || restore"));
+        // A write that fails halfway (a full disk) puts the backup back
+        // instead of leaving a truncated Caddyfile behind `set -e`.
+        assert!(caddy.contains(&format!("cat {CADDYFILE}.oryxis-new > {CADDYFILE} || restore")));
         assert!(!caddy.contains("systemctl restart caddy"));
         assert!(caddy.contains(&format!("cat {CADDYFILE_BACKUP} > {CADDYFILE}\n")));
         assert!(scripts[3].body.contains("curl -fsS -m 3 http://127.0.0.1:8080/healthz"));
