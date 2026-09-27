@@ -69,6 +69,21 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.19.0" date="2026-09-27">
+      <description>
+        <p>
+          Hosts move between folders from the card menu, a selection bar
+          or a drag, and a multi-select mode connects, moves or removes
+          them in batches. Adds Alibaba Cloud and Tencent Cloud accounts,
+          a one-click relay install on one of your hosts, restored tabs
+          that reconnect at launch, Ctrl+wheel and touchpad pinch zoom,
+          theme tags with Dark and Light filters, and an sz download that
+          asks where to save while it receives. Each jump host now answers
+          with its own one-time code and algorithms.
+        </p>
+      </description>
+      <url>https://github.com/wilsonglasser/oryxis/releases/tag/v0.19.0</url>
+    </release>
     <release version="0.18.0" date="2026-09-09">
       <description>
         <p>

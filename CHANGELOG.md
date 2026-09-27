@@ -4,7 +4,9 @@ All notable changes to Oryxis are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.19.0] - 2026-09-27
+
+Hosts move between folders by menu, selection bar or drag, and a multi-select mode connects, moves or removes them in batches. Alibaba Cloud and Tencent Cloud join the cloud accounts, the relay installs itself on one of your hosts, restored tabs can reconnect at launch, and MCP reaches hosts behind jump hosts.
 
 ### Added
 - A multi-select mode in the host list toolbar: clicks pick cards instead of connecting (#234, by @shideqin).
