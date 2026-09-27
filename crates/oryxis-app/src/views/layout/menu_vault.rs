@@ -660,14 +660,14 @@ impl Oryxis {
             self.sort_row(
                 kind,
                 ListSort::LabelAsc,
-                iced_fonts::lucide::arrow_down_a_z::<iced::Theme, iced::Renderer>(),
+                iced_fonts::lucide::arrow_down_a_z::<iced::Theme>(),
                 "sort_label_asc",
                 current == ListSort::LabelAsc,
             ),
             self.sort_row(
                 kind,
                 ListSort::LabelDesc,
-                iced_fonts::lucide::arrow_down_z_a::<iced::Theme, iced::Renderer>(),
+                iced_fonts::lucide::arrow_down_z_a::<iced::Theme>(),
                 "sort_label_desc",
                 current == ListSort::LabelDesc,
             ),
@@ -675,14 +675,14 @@ impl Oryxis {
             self.sort_row(
                 kind,
                 ListSort::NewestFirst,
-                iced_fonts::lucide::calendar_arrow_down::<iced::Theme, iced::Renderer>(),
+                iced_fonts::lucide::calendar_arrow_down::<iced::Theme>(),
                 "sort_newest_first",
                 current == ListSort::NewestFirst,
             ),
             self.sort_row(
                 kind,
                 ListSort::OldestFirst,
-                iced_fonts::lucide::calendar_arrow_up::<iced::Theme, iced::Renderer>(),
+                iced_fonts::lucide::calendar_arrow_up::<iced::Theme>(),
                 "sort_oldest_first",
                 current == ListSort::OldestFirst,
             ),

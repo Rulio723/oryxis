@@ -128,7 +128,7 @@ impl Oryxis {
     fn group_defaults_header(&self) -> Element<'_, Message> {
         let open = self.group_edit.defaults_open;
         let chevron = if open {
-            iced_fonts::lucide::chevron_down::<iced::Theme, iced::Renderer>()
+            iced_fonts::lucide::chevron_down::<iced::Theme>()
         } else if crate::i18n::is_rtl_layout() {
             iced_fonts::lucide::chevron_left()
         } else {

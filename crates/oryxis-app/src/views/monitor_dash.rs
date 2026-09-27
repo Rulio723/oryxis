@@ -763,7 +763,7 @@ impl Oryxis {
 /// as `host_view_toggle_button` (the two live in the same card-grid
 /// family and were reading opposite ways).
 fn dash_view_toggle_button(list_view: bool) -> Element<'static, Message> {
-    let glyph: iced::widget::Text<'static, iced::Theme, iced::Renderer> = if list_view {
+    let glyph: iced::widget::Text<'static, iced::Theme> = if list_view {
         iced_fonts::lucide::list()
     } else {
         iced_fonts::lucide::layout_grid()

@@ -214,6 +214,7 @@ impl Oryxis {
                 x: None,
                 y: Some(idx as f32 / denom as f32),
             },
+            iced::widget::operation::Animation::Instant,
         )
     }
 

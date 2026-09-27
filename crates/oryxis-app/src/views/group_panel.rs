@@ -125,7 +125,7 @@ impl Oryxis {
             8.0,
             button(
                 container(
-                    iced_fonts::lucide::chevron_down::<iced::Theme, iced::Renderer>()
+                    iced_fonts::lucide::chevron_down::<iced::Theme>()
                         .size(12)
                         .color(OryxisColors::t().text_muted),
                 )

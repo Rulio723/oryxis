@@ -396,7 +396,7 @@ impl Oryxis {
         // Stable id so the keyboard router can keep the selected row
         // in view.
         .id(iced::widget::Id::new("settings-connection-scroll"))
-        .on_scroll(|v| Message::Settings(SettingsMessage::SectionScrolled(v.relative_offset().y)))
+        .on_scroll(|s| Message::Settings(SettingsMessage::SectionScrolled(s.viewport.relative_offset().y)))
         .height(Length::Fill)
         .into()
     }

@@ -868,7 +868,7 @@ impl crate::app::Oryxis {
         &self,
         kind: crate::state::SortMenuKind,
         sort: crate::state::ListSort,
-        icon: iced::widget::Text<'static, iced::Theme, iced::Renderer>,
+        icon: iced::widget::Text<'static, iced::Theme>,
         label_key: &'static str,
         is_active: bool,
     ) -> iced::Element<'static, Message> {

@@ -97,7 +97,7 @@ impl Oryxis {
                 .padding(Padding { top: 24.0, right: 24.0, bottom: 24.0, left: 24.0 }),
         )
         .id(iced::widget::Id::new("settings-monitoring-scroll"))
-        .on_scroll(|v| Message::Settings(SettingsMessage::SectionScrolled(v.relative_offset().y)))
+        .on_scroll(|s| Message::Settings(SettingsMessage::SectionScrolled(s.viewport.relative_offset().y)))
         .height(Length::Fill)
         .into()
     }

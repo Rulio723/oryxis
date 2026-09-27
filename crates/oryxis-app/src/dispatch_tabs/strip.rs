@@ -91,6 +91,7 @@ impl Oryxis {
                 return iced::widget::operation::scroll_by(
                     iced::widget::Id::new("tab-scroll"),
                     iced::widget::scrollable::AbsoluteOffset { x: -dy, y: 0.0 },
+                    iced::widget::operation::Animation::Instant,
                 );
             }
             TabsMessage::ShowTabMenu(idx) => {

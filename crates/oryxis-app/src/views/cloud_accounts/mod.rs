@@ -29,9 +29,9 @@ pub(super) fn section_header<'a>(
     collapsed: bool,
 ) -> Element<'a, Message> {
     let chevron = if collapsed {
-        iced_fonts::lucide::chevron_right::<iced::Theme, iced::Renderer>()
+        iced_fonts::lucide::chevron_right::<iced::Theme>()
     } else {
-        iced_fonts::lucide::chevron_down::<iced::Theme, iced::Renderer>()
+        iced_fonts::lucide::chevron_down::<iced::Theme>()
     };
     button(
         row![

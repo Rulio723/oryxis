@@ -77,7 +77,7 @@ impl Oryxis {
         // that still gives the glyph breathing room.
         let add_chevron = button(
             container(
-                iced_fonts::lucide::chevron_down::<iced::Theme, iced::Renderer>()
+                iced_fonts::lucide::chevron_down::<iced::Theme>()
                     .size(12).color(OryxisColors::t().button_text),
             )
             .center_y(Length::Fixed(24.0))

@@ -363,6 +363,7 @@ impl Oryxis {
         iced::widget::operation::scroll_to(
             iced::widget::Id::new(PASSWORD_SUGGEST_SCROLL_ID),
             iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: next },
+            iced::widget::operation::Animation::Instant,
         )
     }
 

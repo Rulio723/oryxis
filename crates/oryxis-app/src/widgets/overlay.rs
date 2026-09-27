@@ -54,7 +54,7 @@ pub(crate) fn bounds_reporter<'a, Message: 'a>(
             tree: &mut Tree,
             renderer: &iced::Renderer,
             limits: &layout::Limits,
-        ) -> layout::Node {
+        ) {
             self.content
                 .as_widget_mut()
                 .layout(tree, renderer, limits)
@@ -65,7 +65,7 @@ pub(crate) fn bounds_reporter<'a, Message: 'a>(
             renderer: &mut iced::Renderer,
             theme: &Theme,
             style: &renderer::Style,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
         ) {
@@ -81,19 +81,20 @@ pub(crate) fn bounds_reporter<'a, Message: 'a>(
         fn operate(
             &mut self,
             tree: &mut Tree,
-            layout: Layout<'_>,
+            layout: Layout,
+            viewport: &Rectangle,
             renderer: &iced::Renderer,
             operation: &mut dyn Operation,
         ) {
             self.content
                 .as_widget_mut()
-                .operate(tree, layout, renderer, operation);
+                .operate(tree, layout, viewport, renderer, operation);
         }
         fn update(
             &mut self,
             tree: &mut Tree,
             event: &Event,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             renderer: &iced::Renderer,
             shell: &mut Shell<'_, Message>,
@@ -106,7 +107,7 @@ pub(crate) fn bounds_reporter<'a, Message: 'a>(
         fn mouse_interaction(
             &self,
             tree: &Tree,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
             renderer: &iced::Renderer,
@@ -118,17 +119,19 @@ pub(crate) fn bounds_reporter<'a, Message: 'a>(
         fn overlay<'b>(
             &'b mut self,
             tree: &'b mut Tree,
-            layout: Layout<'b>,
+            layout: Layout,
             renderer: &iced::Renderer,
             viewport: &Rectangle,
             translation: Vector,
-        ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+            window: Size,
+        ) -> Vec<overlay::Element<'b, Message, Theme, iced::Renderer>> {
             self.content.as_widget_mut().overlay(
                 tree,
                 layout,
                 renderer,
                 viewport,
                 translation,
+                window,
             )
         }
     }
@@ -194,7 +197,7 @@ pub(crate) fn press_hit_reporter<'a, Message: 'a, T: Clone + 'a>(
             tree: &mut Tree,
             renderer: &iced::Renderer,
             limits: &layout::Limits,
-        ) -> layout::Node {
+        ) {
             self.content
                 .as_widget_mut()
                 .layout(tree, renderer, limits)
@@ -205,7 +208,7 @@ pub(crate) fn press_hit_reporter<'a, Message: 'a, T: Clone + 'a>(
             renderer: &mut iced::Renderer,
             theme: &Theme,
             style: &renderer::Style,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
         ) {
@@ -216,19 +219,20 @@ pub(crate) fn press_hit_reporter<'a, Message: 'a, T: Clone + 'a>(
         fn operate(
             &mut self,
             tree: &mut Tree,
-            layout: Layout<'_>,
+            layout: Layout,
+            viewport: &Rectangle,
             renderer: &iced::Renderer,
             operation: &mut dyn Operation,
         ) {
             self.content
                 .as_widget_mut()
-                .operate(tree, layout, renderer, operation);
+                .operate(tree, layout, viewport, renderer, operation);
         }
         fn update(
             &mut self,
             tree: &mut Tree,
             event: &Event,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             renderer: &iced::Renderer,
             shell: &mut Shell<'_, Message>,
@@ -251,7 +255,7 @@ pub(crate) fn press_hit_reporter<'a, Message: 'a, T: Clone + 'a>(
         fn mouse_interaction(
             &self,
             tree: &Tree,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
             renderer: &iced::Renderer,
@@ -263,17 +267,19 @@ pub(crate) fn press_hit_reporter<'a, Message: 'a, T: Clone + 'a>(
         fn overlay<'b>(
             &'b mut self,
             tree: &'b mut Tree,
-            layout: Layout<'b>,
+            layout: Layout,
             renderer: &iced::Renderer,
             viewport: &Rectangle,
             translation: Vector,
-        ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+            window: Size,
+        ) -> Vec<overlay::Element<'b, Message, Theme, iced::Renderer>> {
             self.content.as_widget_mut().overlay(
                 tree,
                 layout,
                 renderer,
                 viewport,
                 translation,
+                window,
             )
         }
     }
@@ -324,7 +330,7 @@ pub(crate) fn report_container_id<'a, Message: 'a>(
             tree: &mut Tree,
             renderer: &iced::Renderer,
             limits: &layout::Limits,
-        ) -> layout::Node {
+        ) {
             self.content.as_widget_mut().layout(tree, renderer, limits)
         }
         fn draw(
@@ -333,7 +339,7 @@ pub(crate) fn report_container_id<'a, Message: 'a>(
             renderer: &mut iced::Renderer,
             theme: &Theme,
             style: &renderer::Style,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
         ) {
@@ -344,20 +350,21 @@ pub(crate) fn report_container_id<'a, Message: 'a>(
         fn operate(
             &mut self,
             tree: &mut Tree,
-            layout: Layout<'_>,
+            layout: Layout,
+            viewport: &Rectangle,
             renderer: &iced::Renderer,
             operation: &mut dyn Operation,
         ) {
-            operation.container(Some(&Id::new(self.id)), layout.bounds());
+            operation.container(Some(&Id::new(self.id)), layout.bounds(), viewport);
             self.content
                 .as_widget_mut()
-                .operate(tree, layout, renderer, operation);
+                .operate(tree, layout, viewport, renderer, operation);
         }
         fn update(
             &mut self,
             tree: &mut Tree,
             event: &Event,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             renderer: &iced::Renderer,
             shell: &mut Shell<'_, Message>,
@@ -370,7 +377,7 @@ pub(crate) fn report_container_id<'a, Message: 'a>(
         fn mouse_interaction(
             &self,
             tree: &Tree,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
             renderer: &iced::Renderer,
@@ -382,14 +389,15 @@ pub(crate) fn report_container_id<'a, Message: 'a>(
         fn overlay<'b>(
             &'b mut self,
             tree: &'b mut Tree,
-            layout: Layout<'b>,
+            layout: Layout,
             renderer: &iced::Renderer,
             viewport: &Rectangle,
             translation: Vector,
-        ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+            window: Size,
+        ) -> Vec<overlay::Element<'b, Message, Theme, iced::Renderer>> {
             self.content
                 .as_widget_mut()
-                .overlay(tree, layout, renderer, viewport, translation)
+                .overlay(tree, layout, renderer, viewport, translation, window)
         }
     }
 
@@ -411,9 +419,9 @@ pub(crate) fn scroll_into_view_task(
     margin: f32,
 ) -> iced::Task<crate::app::Message> {
     use iced::advanced::widget::operation::scrollable::{AbsoluteOffset, Scrollable};
-    use iced::advanced::widget::operation::Outcome;
+    use iced::advanced::widget::operation::{Animation, Outcome};
     use iced::advanced::widget::{Id, Operation};
-    use iced::{Rectangle, Vector};
+    use iced::{Rectangle, Size, Vector};
 
     struct Measure {
         scroll_id: Id,
@@ -426,21 +434,16 @@ pub(crate) fn scroll_into_view_task(
         fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
             operate(self);
         }
-        fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
-            if id == Some(&self.target_id) {
-                self.row_top = Some(bounds.y);
-            }
-        }
-        fn scrollable(
-            &mut self,
-            id: Option<&Id>,
-            _bounds: Rectangle,
-            content_bounds: Rectangle,
-            _translation: Vector,
-            _state: &mut dyn Scrollable,
-        ) {
+        fn container(&mut self, id: Option<&Id>, bounds: Rectangle, _viewport: &Rectangle) {
+            // The scrollable announces its CONTENT's bounds as a
+            // container under its own id, right after `scrollable`, and
+            // both those bounds and the rows' are untranslated layout
+            // positions, so their difference is the row's offset inside
+            // the content.
             if id == Some(&self.scroll_id) {
-                self.content_top = Some(content_bounds.y);
+                self.content_top = Some(bounds.y);
+            } else if id == Some(&self.target_id) {
+                self.row_top = Some(bounds.y);
             }
         }
         fn finish(&self) -> Outcome<()> {
@@ -468,16 +471,25 @@ pub(crate) fn scroll_into_view_task(
         fn scrollable(
             &mut self,
             id: Option<&Id>,
-            _bounds: Rectangle,
-            _content_bounds: Rectangle,
+            bounds: Rectangle,
+            content: Size,
             _translation: Vector,
             state: &mut dyn Scrollable,
         ) {
             if id == Some(&self.scroll_id) {
-                state.scroll_to(AbsoluteOffset {
-                    x: None,
-                    y: Some(self.target),
-                });
+                // Instant, not the widget's smooth default: the row this
+                // brings into view is the one the keyboard ring just moved
+                // to, and it has to be on screen in the frame that draws
+                // the ring.
+                state.scroll_to(
+                    AbsoluteOffset {
+                        x: None,
+                        y: Some(self.target),
+                    },
+                    Animation::Instant,
+                    bounds,
+                    content,
+                );
             }
         }
     }
@@ -550,7 +562,7 @@ pub(crate) fn ime_host<'a, Message: 'a>(
             tree: &mut Tree,
             renderer: &iced::Renderer,
             limits: &layout::Limits,
-        ) -> layout::Node {
+        ) {
             self.content.as_widget_mut().layout(tree, renderer, limits)
         }
         fn draw(
@@ -559,7 +571,7 @@ pub(crate) fn ime_host<'a, Message: 'a>(
             renderer: &mut iced::Renderer,
             theme: &Theme,
             style: &renderer::Style,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
         ) {
@@ -570,19 +582,20 @@ pub(crate) fn ime_host<'a, Message: 'a>(
         fn operate(
             &mut self,
             tree: &mut Tree,
-            layout: Layout<'_>,
+            layout: Layout,
+            viewport: &Rectangle,
             renderer: &iced::Renderer,
             operation: &mut dyn Operation,
         ) {
             self.content
                 .as_widget_mut()
-                .operate(tree, layout, renderer, operation);
+                .operate(tree, layout, viewport, renderer, operation);
         }
         fn update(
             &mut self,
             tree: &mut Tree,
             event: &Event,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             renderer: &iced::Renderer,
             shell: &mut Shell<'_, Message>,
@@ -637,7 +650,7 @@ pub(crate) fn ime_host<'a, Message: 'a>(
         fn mouse_interaction(
             &self,
             tree: &Tree,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
             renderer: &iced::Renderer,
@@ -649,14 +662,15 @@ pub(crate) fn ime_host<'a, Message: 'a>(
         fn overlay<'b>(
             &'b mut self,
             tree: &'b mut Tree,
-            layout: Layout<'b>,
+            layout: Layout,
             renderer: &iced::Renderer,
             viewport: &Rectangle,
             translation: Vector,
-        ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+            window: Size,
+        ) -> Vec<overlay::Element<'b, Message, Theme, iced::Renderer>> {
             self.content
                 .as_widget_mut()
-                .overlay(tree, layout, renderer, viewport, translation)
+                .overlay(tree, layout, renderer, viewport, translation, window)
         }
     }
 

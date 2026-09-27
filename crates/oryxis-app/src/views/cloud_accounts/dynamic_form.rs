@@ -186,7 +186,7 @@ impl Oryxis {
         .align_x(dir_align_x());
         let parent_chevron = button(
             container(
-                iced_fonts::lucide::chevron_down::<iced::Theme, iced::Renderer>()
+                iced_fonts::lucide::chevron_down::<iced::Theme>()
                     .size(12)
                     .color(OryxisColors::t().text_muted),
             )

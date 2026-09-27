@@ -145,6 +145,7 @@ impl Oryxis {
                 return Ok(iced::widget::operation::snap_to(
                     id,
                     iced::widget::operation::RelativeOffset { x: None, y: Some(y) },
+                    iced::widget::operation::Animation::Instant,
                 ));
             }
             m => return Err(m),

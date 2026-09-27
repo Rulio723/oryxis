@@ -30,11 +30,18 @@ impl Oryxis {
     /// stays on the proportional default; cosmic-text's PUA fallback
     /// isn't reliable enough to count on for non-code text.
     pub(crate) fn chat_markdown_settings(&self) -> iced::widget::markdown::Settings {
-        let mut md_style = iced::widget::markdown::Style::from(self.theme());
         let nerd = iced::Font::new("SauceCodePro Nerd Font");
-        md_style.inline_code_font = nerd;
-        md_style.code_block_font = nerd;
+        // Colours (links, inline-code highlight, code-block chrome) come
+        // from the theme's `markdown::Catalog`; only the fonts, sizes and
+        // line height are ours. The line height is pinned to the same
+        // 1.3 the application default is (`main.rs`): markdown passes its
+        // own to every text it builds, so the app-wide pin alone would
+        // leave the chat at iced's new 1.375.
         iced::widget::markdown::Settings {
+            font: iced::widget::markdown::Settings::default().font,
+            inline_code_font: nerd,
+            code_block_font: nerd,
+            line_height: iced::widget::text::LineHeight::Relative(1.3),
             text_size: 13.into(),
             h1_size: 17.into(),
             h2_size: 15.into(),
@@ -42,9 +49,9 @@ impl Oryxis {
             h4_size: 13.into(),
             h5_size: 13.into(),
             h6_size: 13.into(),
-            code_size: 12.into(),
+            inline_code_size: 12.into(),
+            code_block_size: 12.into(),
             spacing: 8.into(),
-            style: md_style,
             selectable: true,
             group_selection: true,
         }
@@ -164,9 +171,11 @@ impl Oryxis {
                 // else (paragraphs, headings, lists) renders with the
                 // default markdown behaviour.
                 let md: Element<'_, Message> = iced::widget::markdown::view_with(
-                    msg.parsed_md.iter(),
+                    &msg.parsed_md,
                     md_settings,
-                    &ChatMdViewer,
+                    &ChatMdViewer {
+                        theme: self.theme(),
+                    },
                 );
 
                 // Bubble fills the sidebar width, earlier we clamped
@@ -380,7 +389,9 @@ impl Oryxis {
 /// renders with the iced default. Text widgets in iced 0.14 aren't
 /// selectable, so the Copy button is the user's escape hatch for
 /// pulling commands out of the assistant's response.
-struct ChatMdViewer;
+struct ChatMdViewer {
+    theme: iced::Theme,
+}
 
 impl<'a>
     iced::widget::markdown::Viewer<
@@ -390,6 +401,16 @@ impl<'a>
         iced::Renderer,
     > for ChatMdViewer
 {
+    fn theme(&self) -> &iced::Theme {
+        &self.theme
+    }
+
+    fn highlighter(
+        &self,
+    ) -> &dyn iced::widget::markdown::Highlighter<iced::Code, iced::Theme> {
+        iced::widget::markdown::Catalog::highlighter(&self.theme)
+    }
+
     fn on_link_click(_url: iced::widget::markdown::Uri) -> Message {
         Message::NoOp
     }
@@ -409,6 +430,7 @@ impl<'a>
         // (same iced quirk `chat_header_btn` works around, see its
         // comment below).
         let body: Element<'a, Message> = iced::widget::markdown::code_block(
+            self,
             settings,
             lines,
             Self::on_link_click,

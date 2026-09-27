@@ -159,7 +159,7 @@ impl Oryxis {
             });
         let chevron_btn = button(
             container(
-                iced_fonts::lucide::chevron_down::<iced::Theme, iced::Renderer>()
+                iced_fonts::lucide::chevron_down::<iced::Theme>()
                     .size(12)
                     .color(OryxisColors::t().button_text),
             )

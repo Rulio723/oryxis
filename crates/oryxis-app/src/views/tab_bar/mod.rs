@@ -955,6 +955,7 @@ impl Oryxis {
             return iced::widget::operation::scroll_to(
                 iced::widget::Id::new("tab-scroll"),
                 iced::widget::scrollable::AbsoluteOffset { x: 0.0, y },
+                iced::widget::operation::Animation::Instant,
             );
         }
         // The same estimate the strip renderer uses, so the offsets
@@ -981,6 +982,7 @@ impl Oryxis {
         iced::widget::operation::scroll_to(
             iced::widget::Id::new("tab-scroll"),
             iced::widget::scrollable::AbsoluteOffset { x, y: 0.0 },
+            iced::widget::operation::Animation::Instant,
         )
     }
 }

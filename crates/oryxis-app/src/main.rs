@@ -696,7 +696,7 @@ fn main() -> iced::Result {
     // default install keeps the exact surface it has today.
     let transparent_window = theme::terminal_opacity() < 100;
     theme::set_window_transparent(transparent_window);
-    let mut application =
+    let application =
         iced::application(app::Oryxis::boot, app::Oryxis::update, app::Oryxis::view)
             .title(app::Oryxis::title)
             .theme(app::Oryxis::theme)
@@ -712,14 +712,20 @@ fn main() -> iced::Result {
     // terminal faces. The list (and the rationale for each entry) lives
     // in `fonts::BUNDLED_FONTS` so the headless harness can load the
     // exact same set into its windowless renderer.
-    for font in fonts::BUNDLED_FONTS {
-        application = application.font(*font);
-    }
     let application = application
+        .fonts(fonts::BUNDLED_FONTS.iter().copied())
         // Default UI font is the bundled Noto Sans on every platform, so
         // the UI looks identical everywhere and never depends on a system
         // font being installed.
-        .default_font(theme::SYSTEM_UI)
+        .font(theme::SYSTEM_UI)
+        // iced moved its default line height from 1.3 to 1.375. Every
+        // layout here (row heights, the popup measurements that decide a
+        // flip, the committed `.ice` coordinates) was built and measured
+        // at 1.3, so the app pins it; adopting the new default is a
+        // visual change of its own, not a side effect of a dependency
+        // bump. The headless harness receives this same builder, so the
+        // tests measure what the app draws.
+        .line_height(iced::widget::text::LineHeight::Relative(1.3))
         .window(window::Settings {
             size: window_size,
             // The saved outer position also selects the monitor: winit

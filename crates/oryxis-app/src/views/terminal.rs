@@ -1484,7 +1484,7 @@ impl Oryxis {
 
         let messages_scroll = scrollable(messages_col)
             .id(iced::widget::Id::new("chat-scroll"))
-            .on_scroll(|viewport| Message::Ai(AiMessage::ChatScrolled(viewport.relative_offset().y)))
+            .on_scroll(|scroll| Message::Ai(AiMessage::ChatScrolled(scroll.viewport.relative_offset().y)))
             .width(Length::Fill)
             .height(Length::Fill);
 

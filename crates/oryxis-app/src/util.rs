@@ -814,7 +814,10 @@ fn spawn_and_reap(cmd: &mut std::process::Command) -> bool {
 /// user sends a message and after the assistant response arrives, so
 /// the conversation stays anchored at the latest exchange.
 pub(crate) fn chat_scroll_to_end() -> iced::Task<crate::app::Message> {
-    iced::widget::operation::snap_to_end(iced::widget::Id::new("chat-scroll"))
+    iced::widget::operation::snap_to_end(
+        iced::widget::Id::new("chat-scroll"),
+        iced::widget::operation::Animation::Instant,
+    )
 }
 
 /// Strip non-digit characters and clamp the result against `max`.

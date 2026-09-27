@@ -956,7 +956,7 @@ impl Oryxis {
             // so the two affordances don't overlap.
             let close_btn = button(
                 container(
-                    iced_fonts::lucide::x::<iced::Theme, iced::Renderer>()
+                    iced_fonts::lucide::x::<iced::Theme>()
                         .size(14)
                         .color(OryxisColors::t().button_text),
                 )

@@ -11,7 +11,7 @@ pub(crate) fn sort_toolbar_button(
     current: crate::state::ListSort,
 ) -> Element<'static, Message> {
     use crate::state::ListSort;
-    let glyph: iced::widget::Text<'static, iced::Theme, iced::Renderer> = match current {
+    let glyph: iced::widget::Text<'static, iced::Theme> = match current {
         ListSort::LabelAsc => iced_fonts::lucide::arrow_down_a_z(),
         ListSort::LabelDesc => iced_fonts::lucide::arrow_down_z_a(),
         ListSort::NewestFirst => iced_fonts::lucide::calendar_arrow_down(),
@@ -48,7 +48,7 @@ pub(crate) fn host_view_toggle_button(
     mode: crate::state::HostViewMode,
 ) -> Element<'static, Message> {
     use crate::state::HostViewMode;
-    let glyph: iced::widget::Text<'static, iced::Theme, iced::Renderer> = match mode {
+    let glyph: iced::widget::Text<'static, iced::Theme> = match mode {
         HostViewMode::Grid => iced_fonts::lucide::layout_grid(),
         HostViewMode::List => iced_fonts::lucide::list(),
         HostViewMode::Tree => iced_fonts::lucide::folder_tree(),
@@ -84,7 +84,7 @@ pub(crate) fn host_view_toggle_button(
 /// the monitor board says a paused fleet without a second label. `tip`
 /// names the action, since a glyph alone is not always self-evident.
 pub(crate) fn toolbar_toggle_icon(
-    glyph: iced::widget::Text<'static, iced::Theme, iced::Renderer>,
+    glyph: iced::widget::Text<'static, iced::Theme>,
     message: Message,
     tip: &'static str,
     active: bool,
@@ -136,7 +136,7 @@ pub(crate) fn host_multi_select_toggle_button(active: bool) -> Element<'static, 
 /// the open floating field / menu reads as toggled. A tooltip names the
 /// action since the glyph alone isn't self-evident.
 fn toolbar_icon_button(
-    glyph: iced::widget::Text<'static, iced::Theme, iced::Renderer>,
+    glyph: iced::widget::Text<'static, iced::Theme>,
     msg: Message,
     active: bool,
     tip: &'static str,
@@ -272,7 +272,7 @@ pub(crate) fn card_kebab_button<'a>(
 pub(crate) fn sort_menu_row(
     kind: crate::state::SortMenuKind,
     sort: crate::state::ListSort,
-    icon: iced::widget::Text<'static, iced::Theme, iced::Renderer>,
+    icon: iced::widget::Text<'static, iced::Theme>,
     label_key: &'static str,
     is_active: bool,
 ) -> Element<'static, Message> {

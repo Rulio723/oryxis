@@ -535,6 +535,7 @@ impl Oryxis {
                             x: None,
                             y: Some(pos as f32 / denom as f32),
                         },
+                        iced::widget::operation::Animation::Instant,
                     );
                 }
                 // Highlight moved into an overflowed pill: pop the
@@ -1030,6 +1031,7 @@ impl Oryxis {
         iced::widget::operation::snap_to(
             scroll_id,
             iced::widget::operation::RelativeOffset { x: None, y: Some(y) },
+            iced::widget::operation::Animation::Instant,
         )
     }
 

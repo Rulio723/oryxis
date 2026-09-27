@@ -245,6 +245,7 @@ impl Oryxis {
                 x: None,
                 y: Some(ratio),
             },
+            iced::widget::operation::Animation::Instant,
         )
     }
 
@@ -292,6 +293,7 @@ impl Oryxis {
                 x: None,
                 y: Some(new_offset / max_scroll),
             },
+            iced::widget::operation::Animation::Instant,
         )
     }
 

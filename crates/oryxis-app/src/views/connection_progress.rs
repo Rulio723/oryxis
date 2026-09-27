@@ -955,7 +955,7 @@ impl Oryxis {
             let span: iced::widget::text::Span<'_, ()> =
                 iced::widget::text::Span::new(self.redact_progress(progress, msg))
                     .color(OryxisColors::t().text_secondary);
-            let message = iced::widget::rich_text::<(), Message, _, _>([span])
+            let message = iced::widget::rich_text::<(), Message, _>([span])
                 .size(13)
                 .selectable(true);
             let message_cell = container(message).width(Length::Fill).padding(Padding {

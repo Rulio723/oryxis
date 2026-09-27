@@ -270,9 +270,9 @@ impl Oryxis {
                 .id(iced::widget::Id::new(SCROLL_ID))
                 .width(Length::Fill)
                 .height(Length::Fixed(h))
-                .on_scroll(|vp| {
+                .on_scroll(|scroll| {
                     Message::Terminal(TerminalMessage::PasswordSuggestScrolled(
-                        vp.absolute_offset().y,
+                        scroll.viewport.absolute_offset().y,
                     ))
                 })
                 .into(),

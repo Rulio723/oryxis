@@ -86,7 +86,7 @@ pub(crate) fn select_ring_opt_outset<'a>(
             tree: &mut Tree,
             renderer: &iced::Renderer,
             limits: &layout::Limits,
-        ) -> layout::Node {
+        ) {
             self.content.as_widget_mut().layout(tree, renderer, limits)
         }
         fn draw(
@@ -95,7 +95,7 @@ pub(crate) fn select_ring_opt_outset<'a>(
             renderer: &mut iced::Renderer,
             theme: &Theme,
             style: &renderer::Style,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
         ) {
@@ -128,19 +128,20 @@ pub(crate) fn select_ring_opt_outset<'a>(
         fn operate(
             &mut self,
             tree: &mut Tree,
-            layout: Layout<'_>,
+            layout: Layout,
+            viewport: &Rectangle,
             renderer: &iced::Renderer,
             operation: &mut dyn Operation,
         ) {
             self.content
                 .as_widget_mut()
-                .operate(tree, layout, renderer, operation);
+                .operate(tree, layout, viewport, renderer, operation);
         }
         fn update(
             &mut self,
             tree: &mut Tree,
             event: &Event,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             renderer: &iced::Renderer,
             shell: &mut Shell<'_, Message>,
@@ -153,7 +154,7 @@ pub(crate) fn select_ring_opt_outset<'a>(
         fn mouse_interaction(
             &self,
             tree: &Tree,
-            layout: Layout<'_>,
+            layout: Layout,
             cursor: mouse::Cursor,
             viewport: &Rectangle,
             renderer: &iced::Renderer,
@@ -165,14 +166,15 @@ pub(crate) fn select_ring_opt_outset<'a>(
         fn overlay<'b>(
             &'b mut self,
             tree: &'b mut Tree,
-            layout: Layout<'b>,
+            layout: Layout,
             renderer: &iced::Renderer,
             viewport: &Rectangle,
             translation: Vector,
-        ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+            window: Size,
+        ) -> Vec<overlay::Element<'b, Message, Theme, iced::Renderer>> {
             self.content
                 .as_widget_mut()
-                .overlay(tree, layout, renderer, viewport, translation)
+                .overlay(tree, layout, renderer, viewport, translation, window)
         }
     }
 

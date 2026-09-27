@@ -60,7 +60,7 @@ impl Oryxis {
         );
         let chevron_btn = iced::widget::button(
             container(
-                iced_fonts::lucide::chevron_down::<iced::Theme, iced::Renderer>()
+                iced_fonts::lucide::chevron_down::<iced::Theme>()
                     .size(12)
                     .color(OryxisColors::t().text_muted),
             )

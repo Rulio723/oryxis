@@ -713,6 +713,7 @@ impl Oryxis {
                         x: None,
                         y: Some(ratio),
                     },
+                    iced::widget::operation::Animation::Instant,
                 ));
             }
             m => return Err(m),

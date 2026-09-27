@@ -263,8 +263,9 @@ pub(crate) fn sftp_list_scrollable<'a>(
 ) -> Element<'a, Message> {
     // Report scroll position + viewport height so keyboard navigation can
     // scroll only when the cursor reaches a viewport edge (not on every step).
-    let on_scroll = move |vp: scrollable::Viewport| {
-        Message::Sftp(SftpMessage::SftpListScrolled(side, vp.absolute_offset().y, vp.bounds().height))
+    let on_scroll = move |scroll: scrollable::Scroll| {
+        let vp = scroll.viewport;
+        Message::Sftp(SftpMessage::SftpListScrolled(side, vp.absolute_offset().y, vp.bounds.height))
     };
     if layout.overflow {
         // Sticky header + horizontal scroll (FileZilla-style): the rows get
@@ -287,8 +288,8 @@ pub(crate) fn sftp_list_scrollable<'a>(
             .direction(scrollable::Direction::Horizontal(scrollable::Scrollbar::new()))
             // Track the pan so draw-space rects (the Menu-key row anchor)
             // can be mapped back to the screen while columns are panned.
-            .on_scroll(move |vp: scrollable::Viewport| {
-                Message::Sftp(SftpMessage::SftpListPanned(side, vp.absolute_offset().x))
+            .on_scroll(move |scroll: scrollable::Scroll| {
+                Message::Sftp(SftpMessage::SftpListPanned(side, scroll.viewport.absolute_offset().x))
             })
             .into()
     } else {

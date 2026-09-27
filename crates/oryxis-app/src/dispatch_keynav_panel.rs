@@ -80,6 +80,7 @@ impl Oryxis {
                 x: None,
                 y: Some(idx as f32 / denom as f32),
             },
+            iced::widget::operation::Animation::Instant,
         )
         // snap_to stores a RELATIVE offset that scrollable keeps as a
         // fraction; any later content-height change (a picker value
@@ -91,6 +92,7 @@ impl Oryxis {
         .chain(iced::widget::operation::scroll_by(
             iced::widget::Id::new("side-panel-scroll"),
             iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+            iced::widget::operation::Animation::Instant,
         ))
     }
 

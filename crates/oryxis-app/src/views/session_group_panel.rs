@@ -95,7 +95,7 @@ impl Oryxis {
             .align_x(dir_align_x());
         let folder_chevron = press(
             container(
-                iced_fonts::lucide::chevron_down::<iced::Theme, iced::Renderer>()
+                iced_fonts::lucide::chevron_down::<iced::Theme>()
                     .size(12)
                     .color(OryxisColors::t().text_muted),
             )
