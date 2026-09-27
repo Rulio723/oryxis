@@ -1,0 +1,54 @@
+{
+  "provider_id": "aliyun",
+  "versions": [
+    {
+      "version": "0.1.0",
+      "protocol_versions": [
+        1
+      ],
+      "min_app": "0.19.0",
+      "binaries": [
+        {
+          "os": "linux",
+          "arch": "aarch64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/aliyun-v0.1.0/oryxis-cloud-aliyun-plugin-linux-aarch64",
+          "sha256": "cd954bf3a1ce9eb053b8865e0dcb507f98341f0f3a2c66fd718a8079f8a6bcea",
+          "signature": "2+7PYLJSKe3yYMJgSBuNSsJifzVhTO97ZCILBqoo1b6OFHUyrB07Nh2YUCWESLTvDkKLJRDOmY/7XqyiToV6Dg==",
+          "size": 2496840
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/aliyun-v0.1.0/oryxis-cloud-aliyun-plugin-linux-x86_64",
+          "sha256": "fc8cb73603f5fcec98d140e5239760cc85e10fd555a323fa47d9dc50b76c854a",
+          "signature": "54U44rxqQ9inHMfXDbOJgCa/hda7Mg4J0ul6i7lkq++V/mVdlgZC/gstn4kxibEodUyJZoGJo+Vdo8NI4bHcDw==",
+          "size": 2617336
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/aliyun-v0.1.0/oryxis-cloud-aliyun-plugin-macos-aarch64",
+          "sha256": "345978c86d7cec1005f08fe83d301a1c943c95667f1a13f64348b2edc217b4d4",
+          "signature": "H8cvTLe2FGR2CZtmjIvl77ar8KH17Wf2QLkS9q4+B8Tma7FQb1r/by0HDvftF2n4I8bnXPAULPhuzDtYY2FyDg==",
+          "size": 2265784
+        },
+        {
+          "os": "windows",
+          "arch": "aarch64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/aliyun-v0.1.0/oryxis-cloud-aliyun-plugin-windows-aarch64.exe",
+          "sha256": "3c1312ae68624437834d724a2916b1ecfce6ffb6add89f007ac11e7dbcf11ca4",
+          "signature": "cYBGY38V2weGqUauycs229gHNJDiGhFTOjGQyj+VA7tQUONY8JpSyisqH02Zc2vr6aFZlB6DukzZX4nGx6toAg==",
+          "size": 2305024
+        },
+        {
+          "os": "windows",
+          "arch": "x86_64",
+          "url": "https://github.com/wilsonglasser/oryxis/releases/download/aliyun-v0.1.0/oryxis-cloud-aliyun-plugin-windows-x86_64.exe",
+          "sha256": "93b3078b5f8a5bb0122d2376933eb12909dd7195069f60ed624db7281848869d",
+          "signature": "kccqfsOFuScXBixhZqwwtQxw0yBM6GhakNkDl9M6TIp3d2GT+f3ZkLkKf5rPbfGDsU028iDanpvfCCPxfz5KAg==",
+          "size": 2518528
+        }
+      ]
+    }
+  ]
+}
