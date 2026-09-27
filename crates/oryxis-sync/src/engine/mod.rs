@@ -271,7 +271,9 @@ mod relay_glue;
 mod session;
 mod snapshot;
 
-pub use pairing::{format_pairing_link, parse_pairing_link};
+pub use pairing::{
+    format_pairing_link, parse_pairing_link, sanitize_device_name, DEVICE_NAME_MAX_CHARS,
+};
 pub use snapshot::{build_full_snapshot, merge_snapshot, vault_signature};
 
 // Re-exported so `crate::engine::build_manifest` etc. still resolve

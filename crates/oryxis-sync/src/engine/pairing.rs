@@ -117,6 +117,7 @@ pub(super) async fn run_pairing_as_joiner(
             }
             _ => return Err(SyncError::Protocol("Expected PairingAccepted".into())),
         };
+    let device_name = sanitize_device_name(&device_name, &device_id);
     let host_x25519_pub: [u8; 32] = host_x25519_pub
         .as_slice()
         .try_into()
@@ -149,6 +150,40 @@ pub(super) async fn run_pairing_as_joiner(
     Ok((device_id, device_name))
 }
 
+/// Longest device name kept, in characters. Enforced where a name
+/// ARRIVES from a peer (it is free text its owner typed, and the peer
+/// list renders it) and on the local Settings field.
+pub const DEVICE_NAME_MAX_CHARS: usize = 64;
+
+/// The form of a peer's advertised name that is stored and shown: control
+/// and bidirectional-override characters removed (a name must not be
+/// able to reorder the text around it in the peer list), whitespace
+/// trimmed, capped at [`DEVICE_NAME_MAX_CHARS`]. A name left empty reads
+/// as the start of the device id, which is what the user can match
+/// against the other screen.
+pub fn sanitize_device_name(raw: &str, device_id: &Uuid) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !is_bidi_format(*c))
+        .collect();
+    let capped: String = cleaned.trim().chars().take(DEVICE_NAME_MAX_CHARS).collect();
+    let capped = capped.trim_end().to_string();
+    if capped.is_empty() {
+        device_id.to_string().chars().take(8).collect()
+    } else {
+        capped
+    }
+}
+
+/// Unicode's explicit directional formatting characters (UAX #9): the
+/// marks, embeddings, overrides and isolates.
+fn is_bidi_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+    )
+}
+
 /// Host side of the pairing flow. Validates the joiner's code +
 /// signature, persists the new peer row, and seeds the shared secret.
 #[allow(clippy::too_many_arguments)]
@@ -168,6 +203,7 @@ pub(super) async fn handle_pairing_request(
     peer_endpoint: Option<(SocketAddr, u16)>,
     joiner_x25519_pub: Vec<u8>,
 ) -> Result<(), SyncError> {
+    let device_name = sanitize_device_name(&device_name, &device_id);
     // Per-source attempt key. QUIC: IP; relay: joiner device_id.
     let source = match peer_endpoint {
         Some((addr, _)) => source_key_for_quic(&addr),
@@ -361,4 +397,23 @@ pub(super) async fn reject_pairing(
     }).await?;
     let _ = transport.recv().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn device_name_is_cleaned_capped_and_never_empty() {
+        let id = Uuid::parse_str("12345678-9abc-def0-1234-56789abcdef0").unwrap();
+        assert_eq!(sanitize_device_name("  work-laptop  ", &id), "work-laptop");
+        // Controls and a right-to-left override are dropped.
+        assert_eq!(sanitize_device_name("a\u{202E}b\nc\u{1b}[31m", &id), "abc[31m");
+        let long = "x".repeat(500);
+        assert_eq!(sanitize_device_name(&long, &id).chars().count(), DEVICE_NAME_MAX_CHARS);
+        // Counted in characters, never cut inside one.
+        let wide = "é".repeat(100);
+        assert_eq!(sanitize_device_name(&wide, &id), "é".repeat(DEVICE_NAME_MAX_CHARS));
+        assert_eq!(sanitize_device_name("\u{200F}\t ", &id), "12345678");
+    }
 }
