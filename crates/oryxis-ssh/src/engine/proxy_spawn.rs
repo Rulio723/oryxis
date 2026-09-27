@@ -181,10 +181,22 @@ pub(crate) fn expand_proxy_tokens(
 }
 
 /// The local shell, holding an already-expanded line.
+///
+/// `exec` in front, exactly as OpenSSH does (`expand_proxy_command` in
+/// `sshconnect.c`: `xasprintf(&tmp, "exec %s", proxy_command)`): the
+/// shell REPLACES itself with the proxy, so the process holding the
+/// pipes is the proxy and not a shell waiting on it. A line with more in
+/// it than one command reads the way it reads under `ssh`, which is the
+/// point: the same `~/.ssh/config` line behaves the same here.
+///
+/// The process group is the proxy's own (`process_group(0)`), so
+/// whatever it forks (a browser helper, a background refresher) can be
+/// ended together with it by [`ProxyReaper`].
 #[cfg(unix)]
 fn shell_command(line: &str) -> TokioCommand {
     let mut cmd = TokioCommand::new("sh");
-    cmd.arg("-c").arg(line);
+    cmd.arg("-c").arg(format!("exec {line}"));
+    cmd.process_group(0);
     cmd
 }
 
@@ -241,7 +253,7 @@ fn shell_command(line: &str) -> TokioCommand {
 /// dial the user cancelled would otherwise leave it running with the
 /// login half done. OpenSSH does the same by hand (`SIGHUP` in
 /// `ssh_kill_proxy_command`).
-pub(crate) fn spawn_proxy_process(line: &str) -> std::io::Result<Child> {
+pub(crate) fn spawn_proxy_process(line: &str) -> std::io::Result<(Child, ProxyReaper)> {
     let mut cmd = shell_command(line);
     cmd.kill_on_drop(true);
     cmd.stdin(Stdio::piped())
@@ -252,7 +264,137 @@ pub(crate) fn spawn_proxy_process(line: &str) -> std::io::Result<Child> {
         // left the user with an unexplained EOF during version exchange
         // and nothing anywhere to explain it.
         .stderr(Stdio::piped());
-    cmd.spawn()
+    let child = cmd.spawn()?;
+    let reaper = ProxyReaper::for_child(&child);
+    Ok((child, reaper))
+}
+
+/// Ends a command proxy AND everything it started when dropped.
+///
+/// `kill_on_drop` alone ends only the process it holds, which on Windows
+/// is `cmd.exe` (the proxy is its child and survives it) and on unix is
+/// whatever the line exec'd, not a helper it forked. So the transport
+/// also owns one of these:
+///
+/// - unix: the proxy leads its own process group (`shell_command`), and
+///   the group gets `SIGTERM` at once, then `SIGKILL` after
+///   [`Self::GRACE`] for anything that ignored it.
+/// - Windows: the proxy runs in a Job Object with
+///   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; closing the handle ends every
+///   process in it. The process is assigned right after the spawn, so a
+///   grandchild started in the first instant of `cmd.exe`'s life could
+///   escape it; `cmd /C` does not start the proxy before it has parsed
+///   the line, which is the window this relies on.
+pub(crate) struct ProxyReaper {
+    #[cfg(unix)]
+    pgid: Option<i32>,
+    #[cfg(windows)]
+    job: Option<JobHandle>,
+}
+
+impl ProxyReaper {
+    /// How long the group has to exit on `SIGTERM` before `SIGKILL`.
+    #[cfg(unix)]
+    const GRACE: Duration = Duration::from_millis(300);
+
+    #[cfg(unix)]
+    fn for_child(child: &Child) -> Self {
+        // The leader's pid IS the group id (`process_group(0)`).
+        ProxyReaper {
+            pgid: child.id().and_then(|pid| i32::try_from(pid).ok()),
+        }
+    }
+
+    #[cfg(windows)]
+    fn for_child(child: &Child) -> Self {
+        ProxyReaper {
+            job: child.raw_handle().and_then(JobHandle::containing),
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn for_child(_child: &Child) -> Self {
+        ProxyReaper {}
+    }
+}
+
+impl Drop for ProxyReaper {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pgid) = self.pgid.take() {
+            // SAFETY: plain signal delivery to a process group we
+            // created; a group that is already gone answers ESRCH.
+            unsafe {
+                libc::kill(-pgid, libc::SIGTERM);
+            }
+            std::thread::spawn(move || {
+                std::thread::sleep(Self::GRACE);
+                // SAFETY: as above. A group id is not reused while any
+                // member of the group lives, and the grace is short.
+                unsafe {
+                    libc::kill(-pgid, libc::SIGKILL);
+                }
+            });
+        }
+        #[cfg(windows)]
+        drop(self.job.take());
+    }
+}
+
+/// A Job Object that kills its processes when the last handle closes.
+#[cfg(windows)]
+struct JobHandle(windows_sys::Win32::Foundation::HANDLE);
+
+// SAFETY: a job handle is a kernel object reference, usable from any
+// thread; it is only closed once, in `Drop`.
+#[cfg(windows)]
+unsafe impl Send for JobHandle {}
+#[cfg(windows)]
+unsafe impl Sync for JobHandle {}
+
+#[cfg(windows)]
+impl JobHandle {
+    /// A new kill-on-close job holding `process`, or `None` when any step
+    /// fails (the proxy then ends with `kill_on_drop` alone, as before).
+    fn containing(process: std::os::windows::io::RawHandle) -> Option<Self> {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        // SAFETY: straight Win32 calls on a handle we own; every failure
+        // closes what was opened before returning.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if ok == 0 || AssignProcessToJobObject(job, process as _) == 0 {
+                CloseHandle(job);
+                return None;
+            }
+            Some(JobHandle(job))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for JobHandle {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateJobObjectW and is closed once.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
 }
 
 /// A command proxy's own account of itself.
@@ -281,7 +423,7 @@ pub(crate) struct ProxyStderr {
 struct LivePhase {
     /// Where lines go while the dial is still pending (`None` once the
     /// banner arrived, or on an engine with no UI).
-    output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    output: Option<tokio::sync::mpsc::UnboundedSender<super::ProxyOutputLine>>,
     /// The dial clock and whether anyone is watching this dial.
     clock: Option<super::dial_clock::DialClock>,
     attended: bool,
@@ -305,7 +447,7 @@ impl ProxyStderr {
     /// A sink wired to the dial: `output` receives the proxy's lines until
     /// the banner, and `clock` is stopped while an attended proxy talks.
     pub(crate) fn for_dial(
-        output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        output: Option<tokio::sync::mpsc::UnboundedSender<super::ProxyOutputLine>>,
         clock: Option<super::dial_clock::DialClock>,
         attended: bool,
     ) -> Self {
@@ -327,12 +469,28 @@ impl ProxyStderr {
         tail.push_back(line);
     }
 
-    /// One line the proxy said, on either pipe.
-    pub(crate) fn heard(&self, line: String) {
+    /// One line the proxy said, on `source`'s pipe. The ONE place a
+    /// proxy line enters: it is sanitized here (`sanitize_proxy_line`),
+    /// so the card, the pane, the dial error and the log all see the
+    /// same visible text and none of them sees an escape sequence.
+    /// Returns that text for the caller to log, or `None` when nothing
+    /// visible is left.
+    pub(crate) fn heard(
+        &self,
+        line: &str,
+        source: super::ProxyOutputSource,
+    ) -> Option<String> {
+        let line = super::sanitize_proxy_line(line);
+        if line.trim().is_empty() {
+            return None;
+        }
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         if !live.banner_seen {
             if let Some(tx) = &live.output {
-                let _ = tx.send(line.clone());
+                let _ = tx.send(super::ProxyOutputLine {
+                    text: line.clone(),
+                    source,
+                });
             }
             if live.attended
                 && live.hold.is_none()
@@ -342,7 +500,8 @@ impl ProxyStderr {
             }
         }
         drop(live);
-        self.push(line);
+        self.push(line.clone());
+        Some(line)
     }
 
     /// The SSH banner arrived: the login (if any) is over. Resumes the
@@ -377,6 +536,11 @@ impl ProxyStderr {
         self.lines()
     }
 }
+
+/// How many lines of a command proxy's output reach the log, per pipe.
+/// Every line still reaches the dial error and the UI; the log is the
+/// offline account, and a proxy can print a device code or a token.
+pub(crate) const LOGGED_LINES: usize = 32;
 
 /// Start draining a command proxy's stderr, and hand back the sink the
 /// dial reads its last words from.
@@ -416,14 +580,12 @@ async fn drain_proxy_stderr(
     port: u16,
     sink: ProxyStderr,
 ) {
-    const LOGGED_LINES: usize = 32;
     let mut lines = BufReader::new(stderr).lines();
     let mut logged = 0usize;
     while let Ok(Some(line)) = lines.next_line().await {
-        if line.trim().is_empty() {
+        let Some(line) = sink.heard(&line, super::ProxyOutputSource::Stderr) else {
             continue;
-        }
-        sink.heard(line.clone());
+        };
         if logged >= LOGGED_LINES {
             continue;
         }
@@ -611,7 +773,7 @@ mod tests {
         // assertion that was missing on Windows, where `sh` never did.
         use tokio::io::AsyncReadExt;
 
-        let mut child = spawn_proxy_process("echo oryxis-proxy-ok").expect("proxy spawn");
+        let (mut child, _reaper) = spawn_proxy_process("echo oryxis-proxy-ok").expect("proxy spawn");
         let mut out = String::new();
         child
             .stdout
@@ -637,7 +799,7 @@ mod tests {
         let line = r#"/bin/echo "a b" c"#;
 
         use tokio::io::AsyncReadExt;
-        let mut child = spawn_proxy_process(line).expect("proxy spawn");
+        let (mut child, _reaper) = spawn_proxy_process(line).expect("proxy spawn");
         let mut out = String::new();
         child
             .stdout
@@ -659,9 +821,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_proxy_that_outtalks_the_log_budget_is_not_killed_by_it() {
-        let mut child = spawn_proxy_process(
-            "i=0; while [ $i -lt 200 ]; do echo chatter $i >&2; i=$((i+1)); done; \
-             echo the-last-word >&2; echo done",
+        let (mut child, _reaper) = spawn_proxy_process(
+            "sh -c 'i=0; while [ $i -lt 200 ]; do echo chatter $i >&2; i=$((i+1)); done; \
+             echo the-last-word >&2; echo done'",
         )
         .expect("proxy spawn");
 

@@ -39,6 +39,7 @@ impl SshEngine {
             remote_routes: None,
             banner_tx: None,
             proxy_output_tx: None,
+            attended: false,
             pinned_agent_key: None,
         }
     }
@@ -143,20 +144,34 @@ impl SshEngine {
     /// (a proxy refreshing credentials prints its login instructions
     /// there). Each line arrives as it is printed; the channel is dropped
     /// once the banner arrives. Without it the lines are only logged.
-    pub fn with_proxy_output(mut self, tx: tokio::sync::mpsc::UnboundedSender<String>) -> Self {
+    pub fn with_proxy_output(
+        mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<super::ProxyOutputLine>,
+    ) -> Self {
         self.proxy_output_tx = Some(tx);
         self
     }
 
-    /// Whether a person is watching this dial: the engine has a UI to ask
-    /// about host keys. Unattended engines (boot forwards, MCP, the
-    /// monitor dashboard, sync) are built without one and pass
-    /// `with_strict_host_key(true)` instead. Decides whether a command
-    /// proxy that starts talking before the SSH banner may stop the
-    /// connect clock for a login (`dial_clock`): with nobody there to
-    /// finish a browser login, it may not.
+    /// Mark this dial as ATTENDED: a person is watching it, can SEE what
+    /// a command proxy says (`with_proxy_output` reaches a surface) and
+    /// can STOP it (the caller aborts the dial task). Only then may a
+    /// proxy that starts talking before the SSH banner stop the connect
+    /// clock for a login (`dial_clock`, up to the proxy-auth ceiling):
+    /// a login nobody can see or cancel would just be a ten minute hang.
+    ///
+    /// Explicit rather than inferred from a UI channel on purpose. Having
+    /// a host-key prompt is not the same thing: the SFTP host picker, a
+    /// backup, a remote desktop and a port forward all ask about host
+    /// keys but show no proxy output and hold no cancel, so they keep the
+    /// plain network timeout. Default `false`.
+    pub fn with_attended(mut self, attended: bool) -> Self {
+        self.attended = attended;
+        self
+    }
+
+    /// See `with_attended`.
     pub(crate) fn is_attended(&self) -> bool {
-        self.host_key_ask_tx.is_some()
+        self.attended
     }
 
     pub fn with_strict_host_key(mut self, enabled: bool) -> Self {

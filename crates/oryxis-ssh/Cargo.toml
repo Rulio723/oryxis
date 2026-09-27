@@ -45,7 +45,20 @@ dunce = "1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
+    # A command proxy runs inside a Job Object closed with the transport
+    # (`proxy_spawn::ProxyReaper`), so cancelling a dial ends `cmd.exe`
+    # AND the proxy it started.
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
 ] }
+
+# A command proxy runs in a process group of its own, signalled whole
+# when its transport drops (`proxy_spawn::ProxyReaper`), so a proxy that
+# forked a helper does not outlive a cancelled dial. Already in the lock
+# as a transitive.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 # Build in-process certificates for the cert-auth unit tests via

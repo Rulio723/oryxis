@@ -26,6 +26,7 @@ mod monitor_conn;
 mod net_quality;
 mod proxy_banner;
 mod proxy_consent;
+mod proxy_output;
 mod proxy_spawn;
 mod session;
 mod transport;
@@ -36,6 +37,7 @@ pub use forwarding::*;
 pub use monitor_conn::MonitorConn;
 pub use net_quality::{NetQuality, NetQualitySnapshot};
 pub use proxy_consent::trusted_only_proxy_command_ask;
+pub use proxy_output::{sanitize_proxy_line, ProxyOutputLine, ProxyOutputSource};
 pub use session::*;
 pub use transport::SshTransport;
 pub use terminfo::TermFallback;
@@ -222,7 +224,10 @@ pub struct SshEngine {
     /// (its stderr, and whatever it prints before the SSH banner: login
     /// instructions, a browser URL). `None` logs it only. See
     /// `proxy_spawn::ProxyStderr`.
-    proxy_output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    proxy_output_tx: Option<tokio::sync::mpsc::UnboundedSender<ProxyOutputLine>>,
+    /// Whether someone is watching this dial AND can stop it. See
+    /// `with_attended`.
+    attended: bool,
     /// The host's preferred agent identity (B3): the public key of the
     /// vault key this connection references. Agent auth offers a matching
     /// agent identity FIRST (then the rest, preserving the try-all
@@ -835,9 +840,11 @@ mod tests {
     #[tokio::test]
     async fn a_proxy_that_talks_before_the_banner_still_carries_the_dial() {
         use tokio::io::AsyncReadExt;
-        const CMD: &str = "echo 'WARN Expired SSH credentials found. Will refresh...'; \
-             i=0; while [ $i -lt 30 ]; do printf 'https://sso.example/%0300d\\n' $i; i=$((i+1)); done; \
-             printf 'SSH-2.0-FakeServer\\r\\n'; exec sleep 5";
+        // A script, so it runs under its own `sh -c`: the line itself is
+        // `exec`'d the way OpenSSH execs a ProxyCommand.
+        const CMD: &str = "sh -c 'echo \"WARN Expired SSH credentials found. Will refresh...\"; \
+             i=0; while [ $i -lt 30 ]; do printf \"https://sso.example/%0300d\\n\" $i; i=$((i+1)); done; \
+             printf \"SSH-2.0-FakeServer\\r\\n\"; exec sleep 5'";
         let dial = ProxyTokens {
             host: "host.example",
             port: 22,
@@ -861,8 +868,11 @@ mod tests {
             heard.push(line);
         }
         assert_eq!(heard.len(), 31, "{heard:?}");
-        assert!(heard[0].starts_with("WARN Expired"));
-        assert!(heard[1].starts_with("https://sso.example/") && heard[1].len() > 255);
+        assert!(heard[0].text.starts_with("WARN Expired"));
+        assert!(heard[1].text.starts_with("https://sso.example/") && heard[1].text.len() > 255);
+        // Stdout before the banner, which a relaying proxy fills with the
+        // remote server's own lines.
+        assert!(heard.iter().all(|l| l.source == crate::ProxyOutputSource::BeforeBanner));
     }
 
     #[test]

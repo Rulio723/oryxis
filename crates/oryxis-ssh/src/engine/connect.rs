@@ -607,7 +607,7 @@ impl SshEngine {
 
         let line = super::proxy_spawn::expand_proxy_tokens(cmd, dial)?;
 
-        let mut child = super::proxy_spawn::spawn_proxy_process(&line)
+        let (mut child, reaper) = super::proxy_spawn::spawn_proxy_process(&line)
             .map_err(|e| ProxyCommandError::Spawn(e.to_string()))?;
 
         // The proxy's own complaints are the only account of why a dial
@@ -640,10 +640,17 @@ impl SshEngine {
             .take()
             .ok_or_else(|| SshError::Proxy("ProxyCommand: no stdout".into()))?;
 
-        // The transport owns the child (`kill_on_drop`): the proxy ends
-        // with the connection, or with the dial when it is cancelled.
-        let transport =
-            super::proxy_banner::ProxyTransport::new(stdout, stdin, child, stderr.clone());
+        // The transport owns the child (`kill_on_drop`) and the reaper
+        // (its process group, or its Job Object): the proxy and anything
+        // it started end with the connection, or with the dial when it is
+        // cancelled.
+        let transport = super::proxy_banner::ProxyTransport::new(
+            stdout,
+            stdin,
+            child,
+            reaper,
+            stderr.clone(),
+        );
         Ok((transport, stderr))
     }
 

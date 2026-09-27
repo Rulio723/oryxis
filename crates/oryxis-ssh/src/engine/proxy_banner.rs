@@ -31,7 +31,7 @@ use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 
-use super::proxy_spawn::ProxyStderr;
+use super::proxy_spawn::{ProxyReaper, ProxyStderr};
 
 /// `SSH_MAX_PRE_BANNER_LINES` in OpenSSH's `ssh.h`.
 pub(crate) const MAX_PRE_BANNER_LINES: usize = 1024;
@@ -54,6 +54,9 @@ pub(crate) struct PreBannerFilter<R> {
     inner: R,
     state: FilterState,
     voice: ProxyStderr,
+    /// Lines logged so far; capped like the stderr drain's
+    /// (`proxy_spawn::LOGGED_LINES`), since this pipe may carry 1024.
+    logged: usize,
 }
 
 impl<R> PreBannerFilter<R> {
@@ -65,7 +68,32 @@ impl<R> PreBannerFilter<R> {
                 lines: 0,
             },
             voice,
+            logged: 0,
         }
+    }
+}
+
+/// A line before the banner: to the voice (which sanitizes it), and to the
+/// log while under the cap. A free function over the two fields it needs,
+/// so it can run while the filter's state is borrowed.
+fn hear_before_banner(voice: &ProxyStderr, logged: &mut usize, raw: &str) {
+    let Some(text) = voice.heard(raw, super::ProxyOutputSource::BeforeBanner) else {
+        return;
+    };
+    if *logged >= super::proxy_spawn::LOGGED_LINES {
+        return;
+    }
+    *logged += 1;
+    tracing::warn!(
+        target: "oryxis::ssh::proxy",
+        "command proxy (before the SSH banner): {}",
+        text
+    );
+    if *logged == super::proxy_spawn::LOGGED_LINES {
+        tracing::warn!(
+            target: "oryxis::ssh::proxy",
+            "command proxy: further output before the banner is kept for the dial error but no longer logged"
+        );
     }
 }
 
@@ -120,14 +148,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for PreBannerFilter<R> {
                                 "the command proxy printed more than {MAX_PRE_BANNER_LINES} lines before the SSH banner"
                             ))));
                         }
-                        if !text.trim().is_empty() {
-                            tracing::info!(
-                                target: "oryxis::ssh::proxy",
-                                "command proxy (before the SSH banner): {}",
-                                text
-                            );
-                            this.voice.heard(text);
-                        }
+                        hear_before_banner(&this.voice, &mut this.logged, &text);
                     }
                     let FilterState::Scanning { buf, .. } = &mut this.state else {
                         continue;
@@ -147,9 +168,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for PreBannerFilter<R> {
                         if !buf.is_empty() {
                             let text = line_text(buf);
                             buf.clear();
-                            if !text.trim().is_empty() {
-                                this.voice.heard(text);
-                            }
+                            hear_before_banner(&this.voice, &mut this.logged, &text);
                         }
                         this.state = FilterState::Through;
                         return Poll::Ready(Ok(()));
@@ -162,11 +181,14 @@ impl<R: AsyncRead + Unpin> AsyncRead for PreBannerFilter<R> {
 }
 
 /// The stream a command proxy dial hands russh. Owns the `Child`
-/// (spawned `kill_on_drop`), so the proxy ends with the connection.
+/// (spawned `kill_on_drop`) and its [`ProxyReaper`] (the proxy's process
+/// group, or its Job Object), so the proxy and whatever it started end
+/// with the connection.
 pub(crate) struct ProxyTransport {
     reader: PreBannerFilter<ChildStdout>,
     writer: ChildStdin,
     _child: Child,
+    _reaper: ProxyReaper,
 }
 
 impl ProxyTransport {
@@ -174,12 +196,14 @@ impl ProxyTransport {
         stdout: ChildStdout,
         stdin: ChildStdin,
         child: Child,
+        reaper: ProxyReaper,
         voice: ProxyStderr,
     ) -> Self {
         ProxyTransport {
             reader: PreBannerFilter::new(stdout, voice),
             writer: stdin,
             _child: child,
+            _reaper: reaper,
         }
     }
 }
@@ -330,8 +354,11 @@ mod tests {
         drop(w);
         let mut out = Vec::new();
         filter.read_to_end(&mut out).await.unwrap();
-        voice.heard("after the banner".to_string());
-        assert_eq!(rx.recv().await.as_deref(), Some("login at https://sso.example/x"));
+        voice.heard("after the banner", crate::ProxyOutputSource::Stderr);
+        let first = rx.recv().await.expect("a line");
+        assert_eq!(first.text, "login at https://sso.example/x");
+        // A pre-banner stdout line can be the remote server's own.
+        assert_eq!(first.source, crate::ProxyOutputSource::BeforeBanner);
         // The banner closed the UI channel: nothing more arrives.
         assert!(rx.recv().await.is_none());
     }
@@ -346,7 +373,7 @@ mod tests {
         let out = clock
             .run(Duration::from_secs(15), async move {
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                voice.heard("Opening a browser".to_string());
+                voice.heard("Opening a browser", crate::ProxyOutputSource::Stderr);
                 // A login far longer than the network budget.
                 tokio::time::sleep(Duration::from_secs(120)).await;
                 voice.banner_arrived();
@@ -366,7 +393,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let out = clock
             .run(Duration::from_secs(15), async move {
-                voice.heard("Opening a browser".to_string());
+                voice.heard("Opening a browser", crate::ProxyOutputSource::Stderr);
                 std::future::pending::<()>().await
             })
             .await;
@@ -374,33 +401,125 @@ mod tests {
         assert_eq!(started.elapsed(), Duration::from_secs(15));
     }
 
-    /// Dropping the transport (a closed connection, or a dial the user
-    /// cancelled) ends the proxy, even one that ignores its stdin.
+    /// Whether `pid` is gone: reaped, or at worst a zombie.
     #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn dropping_the_transport_kills_the_proxy() {
-        let mut child = super::super::proxy_spawn::spawn_proxy_process("exec sleep 300")
-            .expect("spawn");
-        let pid = child.id().expect("pid");
-        let stdout = child.stdout.take().unwrap();
-        let stdin = child.stdin.take().unwrap();
-        let transport = ProxyTransport::new(stdout, stdin, child, ProxyStderr::default());
-        drop(transport);
-        // Killed and reaped (tokio's orphan reaper), or at worst a zombie.
-        let gone = |pid: u32| match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+    fn gone(pid: u32) -> bool {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Err(_) => true,
             Ok(stat) => stat
                 .rsplit(')')
                 .next()
                 .and_then(|rest| rest.split_whitespace().next())
                 .is_some_and(|state| state == "Z" || state == "X"),
+        }
+    }
+
+    /// Every live (non-zombie) process whose process group is `pgid`.
+    #[cfg(target_os = "linux")]
+    fn group_members(pgid: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        let Ok(dir) = std::fs::read_dir("/proc") else {
+            return out;
         };
-        for _ in 0..100 {
-            if gone(pid) {
+        for entry in dir.flatten() {
+            let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                continue;
+            };
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+                continue;
+            };
+            // Fields after the command name: state ppid pgrp ...
+            let mut rest = stat.rsplit(')').next().unwrap_or("").split_whitespace();
+            let state = rest.next().unwrap_or("");
+            let _ppid = rest.next();
+            let pgrp = rest.next().and_then(|g| g.parse::<u32>().ok());
+            if pgrp == Some(pgid) && state != "Z" && state != "X" {
+                out.push(pid);
+            }
+        }
+        out
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn spawn_transport(line: &str) -> (u32, ProxyTransport) {
+        let (mut child, reaper) =
+            super::super::proxy_spawn::spawn_proxy_process(line).expect("spawn");
+        let pid = child.id().expect("pid");
+        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        (pid, ProxyTransport::new(stdout, stdin, child, reaper, ProxyStderr::default()))
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn wait_until(mut done: impl FnMut() -> bool, what: &str) {
+        for _ in 0..150 {
+            if done() {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        panic!("the proxy {pid} outlived its transport");
+        panic!("{what}");
+    }
+
+    /// Dropping the transport (a closed connection, or a dial the user
+    /// cancelled) ends the proxy, even one that ignores its stdin.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn dropping_the_transport_kills_the_proxy() {
+        let (pid, transport) = spawn_transport("sleep 300").await;
+        drop(transport);
+        wait_until(|| gone(pid), "the proxy outlived its transport").await;
+    }
+
+    /// A line with more than one command: the shell does not stay behind
+    /// holding the pipes (OpenSSH's `exec` prefix), and the process that
+    /// runs is ended with the transport.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_compound_line_dies_with_its_transport() {
+        let (pid, transport) = spawn_transport("sleep 300; true").await;
+        // The group leader is the proxy itself; give the shell a moment to
+        // exec, then drop.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(!gone(pid), "the proxy ended before the transport dropped");
+        drop(transport);
+        wait_until(|| group_members(pid).is_empty(), "the compound proxy outlived its transport")
+            .await;
+    }
+
+    /// A proxy that forks a helper (a login refresher, a browser opener):
+    /// the helper is in the proxy's process group and ends with it.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_proxys_own_children_die_with_the_transport() {
+        let (pid, transport) = spawn_transport("sh -c 'sleep 301 & sleep 302'").await;
+        wait_until(|| group_members(pid).len() >= 2, "the helper never started").await;
+        let members = group_members(pid);
+        drop(transport);
+        wait_until(
+            || members.iter().all(|&m| gone(m)),
+            "a process the proxy started outlived the transport",
+        )
+        .await;
+    }
+
+    /// A hostile server behind a relaying proxy (`nc %h %p`) can put an
+    /// escape sequence before its banner; nothing past the filter sees it.
+    #[tokio::test]
+    async fn escape_sequences_before_the_banner_are_stripped() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let voice = ProxyStderr::for_dial(Some(tx), None, true);
+        let (mut w, r) = tokio::io::duplex(1024);
+        let mut filter = PreBannerFilter::new(r, voice.clone());
+        w.write_all(b"\x1b]52;c;ZXZpbA==\x07hello \x1b[31mworld\x1b[0m\nSSH-2.0-s\r\n")
+            .await
+            .unwrap();
+        drop(w);
+        let mut out = Vec::new();
+        filter.read_to_end(&mut out).await.unwrap();
+        let line = rx.recv().await.expect("a line");
+        assert!(!line.text.contains('\x1b') && !line.text.contains('\x07'));
+        assert!(line.text.contains("hello") && line.text.contains("world"));
+        assert!(voice.settled_tail().await.iter().all(|l| !l.contains('\x1b')));
     }
 }
