@@ -561,6 +561,13 @@ impl DeployPlan {
     /// does nothing but write these files and the binary.
     pub(crate) fn consent_script(&self) -> String {
         let mut s = String::new();
+        // The housekeeping the run starts with is shown literally too:
+        // it deletes on the host, and nothing runs there that this text
+        // did not show first.
+        s.push_str(&format!(
+            "# housekeeping (unprivileged): stale staging dirs of earlier runs\n{}\n",
+            stale_staging_sweep_command(&self.staging)
+        ));
         s.push_str(&format!(
             "# upload (SFTP): mkdir 0700 {staging}\n\
              #   {staging}/oryxis-relay  <- {name} ({version}, sha256 {sha})\n",
@@ -977,6 +984,9 @@ mod tests {
         }
         assert!(consent.contains("oryxis-relay-linux-x86_64 (0.1.1, sha256 abab"));
         assert!(consent.contains("mkdir 0700 /tmp/oryxis-relay-deadbeef"));
+        // The run's first remote command, the stale-staging sweep, is in
+        // the text the user approved, byte for byte.
+        assert!(consent.contains(&stale_staging_sweep_command(&p.staging)));
         assert!(consent.trim_end().ends_with("rm -r /tmp/oryxis-relay-deadbeef"));
     }
 
