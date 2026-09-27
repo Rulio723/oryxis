@@ -290,18 +290,37 @@ impl SshEngine {
         self
     }
 
-    /// This engine as it authenticates a JUMP HOST: identical, except for
-    /// what belongs to the TARGET alone. The keyboard-interactive TOTP
-    /// autofill answers with the hop's own secret (`None` = no autofill):
-    /// offering the target's 30 s code to a bastion would hand a live
-    /// second factor to a machine that is not the one it protects. And the
-    /// agent key pinned for the target is not offered first: that is the
-    /// target's identity, and a bastion has no business being shown it
-    /// ahead of the agent's ordinary order.
-    pub(crate) fn for_hop(&self, hop_totp_secret: Option<&str>) -> Self {
-        let mut hop = self.clone().with_totp_secret(hop_totp_secret);
-        hop.pinned_agent_key = None;
-        hop
+    /// This engine as it dials and authenticates the JUMP HOST `hop`:
+    /// identical (host-key policy, consent channels, timeouts), except for
+    /// what belongs to one host alone, which comes from the hop's own row.
+    ///
+    /// - The keyboard-interactive TOTP autofill answers with the hop's
+    ///   own secret (`None` = no autofill): offering the target's 30 s
+    ///   code to a bastion would hand a live second factor to a machine
+    ///   that is not the one it protects.
+    /// - The agent key pinned for the target is not offered first: that
+    ///   is the target's identity, not the bastion's.
+    /// - The algorithm overrides and the rekey limit are the hop's: a
+    ///   legacy cipher pinned for an old target must not be forced onto
+    ///   a modern bastion's handshake, and a bastion that needs one of
+    ///   its own gets it. A hop with none negotiates the safe defaults.
+    pub(crate) fn for_hop(
+        &self,
+        hop: &oryxis_core::models::connection::Connection,
+        hop_totp_secret: Option<&str>,
+    ) -> Self {
+        let mut engine = self
+            .clone()
+            .with_totp_secret(hop_totp_secret)
+            .with_algorithm_overrides(
+                hop.ciphers.clone(),
+                hop.kex.clone(),
+                hop.macs.clone(),
+                hop.host_key_algorithms.clone(),
+            )
+            .with_rekey_limit_mb(hop.rekey_limit_mb);
+        engine.pinned_agent_key = None;
+        engine
     }
 
     /// Configure the client-side keepalive interval (zero / `None` disables).

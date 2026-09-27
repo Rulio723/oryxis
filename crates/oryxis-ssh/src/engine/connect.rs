@@ -650,25 +650,33 @@ impl SshEngine {
             .ok_or_else(|| SshError::JumpHost("First jump host not found".into()))?;
 
         let first_addr = oryxis_core::net::host_port(&first_jump.hostname, first_jump.port);
+        // The engine as the FIRST HOP sees it (`for_hop`): its own
+        // algorithms, rekey limit and second factor, for the dial (proxied
+        // or direct), the handshake and the authentication alike.
+        let first_engine = self.for_hop(
+            first_jump,
+            resolver.totp_secrets.get(&first_jump_id).map(String::as_str),
+        );
         let mut current_handle = if let Some(first_proxy) = resolver.proxies.get(&first_jump_id) {
             tracing::info!(
                 "First jump host {} sits behind {:?} proxy",
                 first_addr,
                 first_proxy.proxy_type
             );
-            self.connect_via_proxy(
-                first_proxy,
-                &ProxyTokens::for_dial(first_jump),
-                first_jump.address_family,
-            )
-            .await
-            .map_err(|e| SshError::JumpHost(format!("Jump host {} via proxy: {}", first_addr, e)))?
+            first_engine
+                .connect_via_proxy(
+                    first_proxy,
+                    &ProxyTokens::for_dial(first_jump),
+                    first_jump.address_family,
+                )
+                .await
+                .map_err(|e| SshError::JumpHost(format!("Jump host {} via proxy: {}", first_addr, e)))?
         } else {
-            let config = self.make_config();
-            let handler = self.make_handler(&first_jump.hostname, first_jump.port);
+            let config = first_engine.make_config();
+            let handler = first_engine.make_handler(&first_jump.hostname, first_jump.port);
             // The socket goes to the BASTION, so its address-family
             // preference (not the target's) governs this dial.
-            let stream = self.dial_tcp(&first_addr, first_jump.address_family).await
+            let stream = first_engine.dial_tcp(&first_addr, first_jump.address_family).await
                 .map_err(|e| SshError::JumpHost(format!("Jump host {}: {}", first_addr, e)))?;
             client::connect_stream(config, stream, handler)
                 .await
@@ -682,8 +690,7 @@ impl SshEngine {
             .private_keys
             .get(&first_jump_id)
             .map(|pem| KeyMaterial::new(pem, first_cert));
-        // The hop authenticates with ITS OWN second factor (see `for_hop`).
-        self.for_hop(resolver.totp_secrets.get(&first_jump_id).map(String::as_str))
+        first_engine
             .authenticate_handle(
                 &mut current_handle,
                 first_jump,
@@ -713,8 +720,12 @@ impl SshEngine {
                 .map_err(|e| SshError::JumpHost(format!("direct-tcpip to {}: {}", jump.hostname, e)))?;
 
             let stream = channel.into_stream();
-            let config = self.make_config();
-            let handler = self.make_handler(&jump.hostname, jump.port);
+            // Same as the first hop: this hop's own engine, for its
+            // handshake and its authentication.
+            let hop_engine =
+                self.for_hop(jump, resolver.totp_secrets.get(&jump_id).map(String::as_str));
+            let config = hop_engine.make_config();
+            let handler = hop_engine.make_handler(&jump.hostname, jump.port);
             current_handle = client::connect_stream(config, stream, handler)
                 .await
                 .map_err(|e| SshError::JumpHost(format!("SSH handshake via jump: {}", e)))?;
@@ -725,7 +736,7 @@ impl SshEngine {
                 .private_keys
                 .get(&jump_id)
                 .map(|pem| KeyMaterial::new(pem, jump_cert));
-            self.for_hop(resolver.totp_secrets.get(&jump_id).map(String::as_str))
+            hop_engine
                 .authenticate_handle(
                     &mut current_handle,
                     jump,

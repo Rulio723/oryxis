@@ -379,8 +379,9 @@ mod tests {
     fn a_hop_never_carries_the_targets_totp() {
         let engine = SshEngine::new().with_totp_secret(Some("JBSWY3DPEHPK3PXP"));
         assert!(engine.totp.is_some());
-        assert!(engine.for_hop(None).totp.is_none());
-        let hop = engine.for_hop(Some("GEZDGNBVGY3TQOJQ"));
+        let bastion = oryxis_core::models::connection::Connection::new("bastion", "bastion.example");
+        assert!(engine.for_hop(&bastion, None).totp.is_none());
+        let hop = engine.for_hop(&bastion, Some("GEZDGNBVGY3TQOJQ"));
         let hop_totp = oryxis_core::totp::Totp::parse("GEZDGNBVGY3TQOJQ").unwrap();
         assert!(hop.totp == Some(hop_totp));
         // The target's engine is untouched.
@@ -393,8 +394,31 @@ mod tests {
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMX+sbLJm62mwGwiulf8TSu53yefXoMkpggOsXGbn0yj x",
         ));
         assert!(engine.pinned_agent_key.is_some());
-        assert!(engine.for_hop(None).pinned_agent_key.is_none());
+        let bastion = oryxis_core::models::connection::Connection::new("bastion", "bastion.example");
+        assert!(engine.for_hop(&bastion, None).pinned_agent_key.is_none());
         assert!(engine.pinned_agent_key.is_some());
+    }
+
+    #[test]
+    fn a_hop_negotiates_with_its_own_algorithms() {
+        // A legacy cipher pinned for an old target stays on the target.
+        let engine = SshEngine::new()
+            .with_algorithm_overrides(Some(vec!["aes128-cbc".into()]), None, None, None)
+            .with_rekey_limit_mb(Some(64));
+        let mut bastion =
+            oryxis_core::models::connection::Connection::new("bastion", "bastion.example");
+        let hop = engine.for_hop(&bastion, None);
+        assert!(hop.algo_ciphers.is_none());
+        assert!(hop.rekey_limit_mb.is_none());
+        // A bastion that pins its own gets exactly those.
+        bastion.kex = Some(vec!["diffie-hellman-group14-sha1".into()]);
+        bastion.rekey_limit_mb = Some(16);
+        let hop = engine.for_hop(&bastion, None);
+        assert_eq!(hop.algo_kex, Some(vec!["diffie-hellman-group14-sha1".to_string()]));
+        assert_eq!(hop.rekey_limit_mb, Some(16));
+        assert!(hop.algo_ciphers.is_none());
+        // The target's engine is untouched.
+        assert_eq!(engine.algo_ciphers, Some(vec!["aes128-cbc".to_string()]));
     }
 
     #[test]
