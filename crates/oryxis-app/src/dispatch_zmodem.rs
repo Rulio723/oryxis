@@ -590,6 +590,15 @@ impl Oryxis {
                 if orphans.is_empty() {
                     return Task::none();
                 }
+                // The dialog slot is single. Something already on it (an
+                // error raised at boot or at unlock in the same instant)
+                // is not ours to replace: the files stay staged and the
+                // scan is re-armed, so the next unlock offers them again
+                // (and a new launch would anyway).
+                if self.error_dialog.is_some() {
+                    self.zmodem_swept = false;
+                    return Task::none();
+                }
                 // Received under "ask" and never answered: the choice is
                 // still the user's, so it is offered again rather than
                 // made for them (`zmodem_delivery` module docs). Close

@@ -247,6 +247,42 @@ async fn claim_part(
     ))
 }
 
+/// Turn a finished part into the delivered file, WITHOUT ever letting
+/// go of the part's lock while it still reads as a part.
+///
+/// The order is the point. Released first and renamed second, the part
+/// would sit unlocked for a moment under its part name with its sidecar
+/// still naming its source, and a second transfer of the same name from
+/// the same source would claim it, see a matching sidecar and a length
+/// equal to what it expects, and "resume" a file that is being delivered
+/// under it. So, with the lock still held: the sidecar goes first (a part
+/// with no matching sidecar never resumes, it restarts), then the part is
+/// renamed to its final name, and only then is the handle closed.
+///
+/// Renaming a file we hold open is fine on unix. On Windows it works
+/// because std opens files with `FILE_SHARE_DELETE` by default, and the
+/// byte-range lock does not stop a rename. The part always lives in
+/// `dest_dir` itself, so `place_file` renames within one directory and
+/// never takes its cross-volume copy path, which would have to READ the
+/// part through a second handle (refused under a Windows exclusive lock).
+async fn finish_part(
+    file: tokio::fs::File,
+    part: &std::path::Path,
+    dest_dir: &std::path::Path,
+    name: &str,
+    has_owner: bool,
+) -> Result<PathBuf, String> {
+    // `into_std` waits out any write still in flight on the tokio file,
+    // so the bytes are all in the part before it is renamed.
+    let held = file.into_std().await;
+    if has_owner && let Some(sidecar) = resume_owner_path_for_part(part) {
+        let _ = tokio::fs::remove_file(sidecar).await;
+    }
+    let placed = place_file(part, dest_dir, name).await;
+    drop(held);
+    placed
+}
+
 /// One attempt at the part `path`. `symlink_metadata` does NOT follow a
 /// link, so a hostile pre-planted `<name>.oryxis-part` symlink (pointing
 /// at ~/.bashrc, say) is seen for what it is and removed, never opened
@@ -691,26 +727,23 @@ async fn run_download(
                 }
             }
             Step::FileDone => {
-                if let Some(mut file) = dest.take() {
-                    file.flush().await.map_err(|e| format!("flush: {e}"))?;
-                    // Closed (and its lock released) before the part is
-                    // renamed: `into_std` waits out any write still in
-                    // flight, so nothing holds the file past this line.
-                    drop(file.into_inner().into_std().await);
-                }
+                let file = match dest.take() {
+                    Some(mut file) => {
+                        file.flush().await.map_err(|e| format!("flush: {e}"))?;
+                        Some(file.into_inner())
+                    }
+                    None => None,
+                };
                 // The finished part surfaces under its real name only
                 // now; a collision gets the browser-style " (N)".
                 let part = dest_path.take();
-                let final_path = match &part {
-                    Some(part) => Some(place_file(part, &dest_dir, &name).await?),
-                    None => None,
+                let final_path = match (&part, file) {
+                    (Some(part), Some(file)) => Some(
+                        finish_part(file, part, &dest_dir, &name, resume_owner.is_some()).await?,
+                    ),
+                    (Some(part), None) => Some(place_file(part, &dest_dir, &name).await?),
+                    (None, _) => None,
                 };
-                // The part is gone, so is the record of whose it was.
-                if resume_owner.is_some()
-                    && let Some(sidecar) = part.as_deref().and_then(resume_owner_path_for_part)
-                {
-                    let _ = tokio::fs::remove_file(sidecar).await;
-                }
                 if let Some(path) = final_path.as_ref()
                     && let Some(on_disk) = path.file_name()
                 {
@@ -2223,6 +2256,45 @@ mod tests {
             let again = claim_part(&dir, "syslog", 100, Some("host-a")).await.unwrap();
             assert_eq!(again.path, dir.join(format!("syslog{PART_SUFFIX}")));
             assert_eq!(again.resume_at, 40);
+
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+        });
+    }
+
+    /// A finished part is delivered with its lock still held and its
+    /// sidecar already gone, so nothing can mistake it for a resumable
+    /// part on the way: afterwards the final file carries the bytes, no
+    /// part or record is left, and the next transfer of the same name
+    /// from the same source starts from zero.
+    #[test]
+    fn a_finished_part_is_delivered_before_its_lock_is_released() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = std::env::temp_dir().join(format!("oryxis-zm-finish-{}", std::process::id()));
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            tokio::fs::create_dir_all(&dir).await.unwrap();
+
+            let mut part = claim_part(&dir, "syslog", 40, Some("host-a")).await.unwrap();
+            part.file.write_all(&[0xBB; 40]).await.unwrap();
+            part.file.flush().await.unwrap();
+            let sidecar = resume_owner_path_for_part(&part.path).unwrap();
+            assert!(tokio::fs::symlink_metadata(&sidecar).await.is_ok());
+
+            let placed = finish_part(part.file, &part.path, &dir, "syslog", true)
+                .await
+                .unwrap();
+            assert_eq!(placed, dir.join("syslog"));
+            assert_eq!(tokio::fs::read(&placed).await.unwrap(), vec![0xBB; 40]);
+            assert!(tokio::fs::symlink_metadata(&part.path).await.is_err());
+            assert!(tokio::fs::symlink_metadata(&sidecar).await.is_err());
+
+            let next = claim_part(&dir, "syslog", 40, Some("host-a")).await.unwrap();
+            assert_eq!(next.path, dir.join(format!("syslog{PART_SUFFIX}")));
+            assert_eq!(next.resume_at, 0);
 
             let _ = tokio::fs::remove_dir_all(&dir).await;
         });
