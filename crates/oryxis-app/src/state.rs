@@ -61,7 +61,7 @@ pub(crate) use privacy::*;
 pub(crate) use theme_ui::ThemeEditorUi;
 pub(crate) use vault_import::VaultImportState;
 pub(crate) use chat_ui::ChatUi;
-pub(crate) use dash_select::{CardDrag, DashSelection};
+pub(crate) use dash_select::{CardDrag, DashSelection, SelectionScope};
 pub(crate) use hover::HoverState;
 pub(crate) use panels::PanelsOpen;
 pub(crate) use cloud_discover::CloudDiscoverUi;

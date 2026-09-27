@@ -168,6 +168,7 @@ impl Oryxis {
                 | TabsMessage::SelectionClear
                 | TabsMessage::SelectionSelectAll
                 | TabsMessage::SelectionConnect
+                | TabsMessage::BatchConnectCancelRemaining
                 | TabsMessage::SelectionDelete
                 | TabsMessage::SelectionDeleteConfirmed(..)
                 | TabsMessage::ToggleMultiSelect

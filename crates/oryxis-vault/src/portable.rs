@@ -1065,22 +1065,32 @@ pub fn import_vault(
             .any(|g| g.id == *id && g.cloud_query.is_none())
     });
     if let Some(target) = target_group {
+        // What this pass rewrites is an EDIT made here, so it is stamped
+        // now. Kept at the file's `updated_at`, the rewritten row would
+        // tie with the source device's copy of the same entity (same id,
+        // same stamp, different placement), and last-writer-wins has no
+        // answer for a tie: pairing the two devices later would leave
+        // each one keeping its own placement.
+        let now = chrono::Utc::now();
         for ec in &mut payload.connections {
             let c = &mut ec.connection;
             let known = existing_connections.iter().any(|e| e.id == c.id);
             if c.group_id.is_none() && !known {
                 c.group_id = Some(target);
+                c.updated_at = now;
             }
         }
         for g in &mut payload.groups {
             if g.parent_id.is_none() && !existing_group_ids.contains(&g.id) {
                 g.parent_id = Some(target);
+                g.updated_at = now;
             }
         }
         for sg in &mut payload.session_groups {
             let known = existing_session_groups.iter().any(|e| e.id == sg.id);
             if sg.group_id.is_none() && !known {
                 sg.group_id = Some(target);
+                sg.updated_at = now;
             }
         }
     }

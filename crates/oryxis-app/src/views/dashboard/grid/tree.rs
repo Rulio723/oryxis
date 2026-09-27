@@ -44,10 +44,77 @@ enum TreeLead {
     Leaf,
 }
 
+/// One row of the tree as the walk decided it, before any widget is
+/// built. The walk is the single account of what the tree shows and in
+/// which order: the renderer turns entries into rows, and the batch
+/// actions read the host entries out of the same list, so "the hosts
+/// the user sees, in the order they see them" cannot drift between the
+/// picture and a batch connect or delete.
+pub(crate) enum TreeEntry<'a> {
+    Folder {
+        group: &'a oryxis_core::models::Group,
+        count_text: String,
+        brand: Option<&'static str>,
+        expanded: bool,
+        depth: usize,
+    },
+    Dynamic {
+        group: &'a oryxis_core::models::Group,
+        query: &'a oryxis_core::models::cloud::CloudQuery,
+        depth: usize,
+    },
+    Session { idx: usize, depth: usize },
+    Host { idx: usize, depth: usize },
+}
+
 impl Oryxis {
     /// Every row of the tree, top to bottom, as the same
     /// `(element, color, DashNavItem)` tuples the grid emits.
     pub(crate) fn dashboard_tree_cards(&self) -> Vec<(Element<'_, Message>, Color, DashNavItem)> {
+        let privacy_terms = self.privacy_terms();
+        self.dashboard_tree_entries()
+            .into_iter()
+            .map(|entry| match entry {
+                TreeEntry::Folder { group, count_text, brand, expanded, depth } => {
+                    let (el, color) =
+                        self.dash_tree_folder_row(group, count_text, brand, expanded, depth);
+                    (el, color, DashNavItem::Group(group.id))
+                }
+                TreeEntry::Dynamic { group, query, depth } => {
+                    let (el, color) = self.dash_tree_dynamic_group_row(group, query, depth);
+                    (el, color, DashNavItem::Group(group.id))
+                }
+                TreeEntry::Session { idx, depth } => {
+                    let (el, color) =
+                        self.dash_tree_session_row(idx, &self.session_groups[idx], depth);
+                    (el, color, DashNavItem::SessionGroup(idx))
+                }
+                TreeEntry::Host { idx, depth } => {
+                    let (el, color) = self.dash_tree_host_row(idx, &privacy_terms, depth);
+                    (el, color, DashNavItem::Host(idx))
+                }
+            })
+            .collect()
+    }
+
+    /// The host rows of the tree, as indices into `self.connections`,
+    /// in display order: what `dashboard_host_order` answers for the
+    /// grid and list modes. Hosts inside collapsed folders are not on
+    /// screen and are not in it.
+    pub(crate) fn dashboard_tree_host_order(&self) -> Vec<usize> {
+        self.dashboard_tree_entries()
+            .into_iter()
+            .filter_map(|entry| match entry {
+                TreeEntry::Host { idx, .. } => Some(idx),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The walk behind both of the above: every entry of the tree, top
+    /// to bottom, with the filters, the search and the fold state
+    /// applied.
+    fn dashboard_tree_entries(&self) -> Vec<TreeEntry<'_>> {
         let search_lower = self.host_search.to_lowercase();
         let searching = !search_lower.trim().is_empty();
         // Provider hiding, counts, brand inference and the filter
@@ -58,7 +125,6 @@ impl Oryxis {
         let cloud_filter_groups = &pre.cloud_filter_groups;
         let tag_filter_groups = &pre.tag_filter_groups;
         let infer_brand = |gid: &Uuid| pre.infer_brand(self, gid);
-        let privacy_terms = self.privacy_terms();
 
         // Which host indices pass the non-search filters (provider
         // hiding, cloud-profile chip, tag filter). The search filter
@@ -103,7 +169,7 @@ impl Oryxis {
         let mut search_memo: std::collections::HashMap<Uuid, bool> =
             std::collections::HashMap::new();
 
-        let mut rows: Vec<(Element<'_, Message>, Color, DashNavItem)> = Vec::new();
+        let mut rows: Vec<TreeEntry<'_>> = Vec::new();
         let mut visited: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
 
         // Roots: parentless groups plus broken-ancestry ones (dangling
@@ -135,7 +201,6 @@ impl Oryxis {
                 &infer_brand,
                 &pre.direct_host_count,
                 &pre.nested_group_count,
-                &privacy_terms,
                 &mut visited,
             );
         }
@@ -160,8 +225,7 @@ impl Oryxis {
             if searching && !sg.label.to_lowercase().contains(&search_lower) {
                 continue;
             }
-            let (el, color) = self.dash_tree_session_row(i, sg, 0);
-            rows.push((el, color, DashNavItem::SessionGroup(i)));
+            rows.push(TreeEntry::Session { idx: i, depth: 0 });
         }
 
         // Root hosts: no group, or a group id that no longer resolves.
@@ -180,10 +244,7 @@ impl Oryxis {
             |&i| self.connections[i].label.clone(),
             |&i| self.connections[i].created_at,
         );
-        for i in root_hosts {
-            let (el, color) = self.dash_tree_host_row(i, &privacy_terms, 0);
-            rows.push((el, color, DashNavItem::Host(i)));
-        }
+        rows.extend(root_hosts.into_iter().map(|idx| TreeEntry::Host { idx, depth: 0 }));
         rows
     }
 
@@ -195,7 +256,7 @@ impl Oryxis {
     #[allow(clippy::too_many_arguments)]
     fn tree_walk_group<'a>(
         &'a self,
-        rows: &mut Vec<(Element<'a, Message>, Color, DashNavItem)>,
+        rows: &mut Vec<TreeEntry<'a>>,
         group: &'a oryxis_core::models::Group,
         depth: usize,
         searching: bool,
@@ -208,7 +269,6 @@ impl Oryxis {
         infer_brand: &dyn Fn(&Uuid) -> Option<&'static str>,
         direct_host_count: &std::collections::HashMap<Uuid, usize>,
         nested_group_count: &std::collections::HashMap<Uuid, usize>,
-        privacy_terms: &[String],
         visited: &mut std::collections::HashSet<Uuid>,
     ) {
         if !visited.insert(group.id) {
@@ -232,8 +292,7 @@ impl Oryxis {
             // Dynamic (ECS / K8s) groups keep their drill-down: the
             // dedicated cloud-group screen (task list, refresh,
             // transport) is richer than inline rows at this scale.
-            let (el, color) = self.dash_tree_dynamic_group_row(group, query, depth);
-            rows.push((el, color, DashNavItem::Group(gid)));
+            rows.push(TreeEntry::Dynamic { group, query, depth });
             return;
         }
 
@@ -241,9 +300,13 @@ impl Oryxis {
         let direct_hosts = direct_host_count.get(&gid).copied().unwrap_or(0);
         let nested_groups = nested_group_count.get(&gid).copied().unwrap_or(0);
         let count_text = crate::i18n::host_count(direct_hosts + nested_groups);
-        let (el, color) =
-            self.dash_tree_folder_row(group, count_text, infer_brand(&gid), expanded, depth);
-        rows.push((el, color, DashNavItem::Group(gid)));
+        rows.push(TreeEntry::Folder {
+            group,
+            count_text,
+            brand: infer_brand(&gid),
+            expanded,
+            depth,
+        });
         if !expanded {
             return;
         }
@@ -273,7 +336,6 @@ impl Oryxis {
                 infer_brand,
                 direct_host_count,
                 nested_group_count,
-                privacy_terms,
                 visited,
             );
         }
@@ -294,8 +356,7 @@ impl Oryxis {
             {
                 continue;
             }
-            let (el, color) = self.dash_tree_session_row(i, sg, depth + 1);
-            rows.push((el, color, DashNavItem::SessionGroup(i)));
+            rows.push(TreeEntry::Session { idx: i, depth: depth + 1 });
         }
 
         let mut hosts: Vec<usize> = (0..self.connections.len())
@@ -310,10 +371,7 @@ impl Oryxis {
             |&i| self.connections[i].label.clone(),
             |&i| self.connections[i].created_at,
         );
-        for i in hosts {
-            let (el, color) = self.dash_tree_host_row(i, privacy_terms, depth + 1);
-            rows.push((el, color, DashNavItem::Host(i)));
-        }
+        rows.extend(hosts.into_iter().map(|idx| TreeEntry::Host { idx, depth: depth + 1 }));
     }
 
     /// A manual folder as a dense tree row: leading fold chevron,
@@ -381,7 +439,7 @@ impl Oryxis {
                     .wrapping(iced::widget::text::Wrapping::None)
                     .into(),
             ),
-            Message::Ai(crate::app::AiMessage::HostsTreeToggleGroup(gid)),
+            Some(Message::Ai(crate::app::AiMessage::HostsTreeToggleGroup(gid))),
             hovered,
             Message::Tabs(TabsMessage::ShowFolderActions(gid)),
             Message::Tabs(TabsMessage::FolderCardHovered(gid)),
@@ -405,6 +463,10 @@ impl Oryxis {
     ) -> (Element<'a, Message>, Color) {
         let conn = &self.connections[idx];
         let hovered = self.hover.card == Some(idx) || self.card_context_menu == Some(conn.id);
+        let dragging_this = self
+            .card_drag
+            .as_ref()
+            .is_some_and(|d| d.active && d.ids.contains(&conn.id));
         let display_label = if self.privacy_active(conn) && self.hover.card != Some(idx) {
             crate::widgets::redact_for_display(
                 &conn.label,
@@ -554,7 +616,11 @@ impl Oryxis {
             icon_box,
             label_el,
             Some(subtitle_el),
-            Message::Tabs(TabsMessage::CardPressed(idx)),
+            // A row in an active drag loses its press, the card's rule
+            // (`dashboard_host_card`): the fork's `button` publishes on a
+            // release only while `on_press` is set in that frame, so a
+            // drag abandoned back over its own row cannot dial the host.
+            (!dragging_this).then_some(Message::Tabs(TabsMessage::CardPressed(idx))),
             hovered,
             Message::Tabs(TabsMessage::ShowCardMenu(idx)),
             Message::Tabs(TabsMessage::CardHovered(idx)),
@@ -611,7 +677,7 @@ impl Oryxis {
                     .wrapping(iced::widget::text::Wrapping::None)
                     .into(),
             ),
-            Message::SessionGroup(SessionGroupMessage::OpenSessionGroup(idx)),
+            Some(Message::SessionGroup(SessionGroupMessage::OpenSessionGroup(idx))),
             hovered,
             Message::SessionGroup(SessionGroupMessage::ShowSessionGroupMenu(idx)),
             Message::SessionGroup(SessionGroupMessage::SessionGroupCardHovered(idx)),
@@ -670,7 +736,7 @@ impl Oryxis {
                     .wrapping(iced::widget::text::Wrapping::None)
                     .into(),
             ),
-            Message::Navigation(NavigationMessage::OpenGroup(gid)),
+            Some(Message::Navigation(NavigationMessage::OpenGroup(gid))),
             hovered,
             Message::Cloud(CloudMessage::ShowDynamicGroupCardMenu(gid)),
             Message::Cloud(CloudMessage::DynamicGroupCardHovered(gid)),
@@ -711,7 +777,7 @@ impl Oryxis {
         icon: Element<'a, Message>,
         label: Element<'a, Message>,
         subtitle: Option<Element<'a, Message>>,
-        on_press: Message,
+        on_press: Option<Message>,
         hovered: bool,
         kebab_msg: Message,
         on_enter: Message,
@@ -788,7 +854,7 @@ impl Oryxis {
         let row_btn = button(
             dir_row(cells).align_y(iced::Alignment::Center),
         )
-        .on_press(on_press)
+        .on_press_maybe(on_press)
         .width(Length::Fill)
         .padding(row_padding)
         .style(move |_, status| {

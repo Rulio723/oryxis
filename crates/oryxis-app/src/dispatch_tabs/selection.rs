@@ -87,7 +87,7 @@ impl Oryxis {
             }
             TabsMessage::SelectionSelectAll => {
                 let visible: Vec<Uuid> = self
-                    .dashboard_host_order()
+                    .dashboard_visible_host_order()
                     .into_iter()
                     .map(|i| self.connections[i].id)
                     .collect();
@@ -146,6 +146,13 @@ impl Oryxis {
                         self.batch_dials.push_back(id);
                     }
                 }
+                Task::none()
+            }
+            TabsMessage::BatchConnectCancelRemaining => {
+                // Only what has not been dialled yet: the dial in flight
+                // (or the failed card holding the queue) is the user's to
+                // finish or close, and the tabs already opened stay.
+                self.batch_dials.clear();
                 Task::none()
             }
             TabsMessage::MoveHostsPick(ids) => {
@@ -222,13 +229,51 @@ impl Oryxis {
                 .any(|p| p.connecting)
     }
 
+    /// What the dashboard is showing right now, as far as the selection
+    /// is concerned. Read by the update funnel, which drops a selection
+    /// built under another scope (`DashSelection::rescope`).
+    pub(crate) fn dash_selection_scope(&self) -> crate::state::SelectionScope {
+        crate::state::SelectionScope {
+            group: self.active_group,
+            search: self.host_search.trim().to_string(),
+            view_mode: self.prefs.host_view_mode,
+            cloud_profile: self.host_filter_cloud_profile,
+            tags: self.host_filter_tags.clone(),
+        }
+    }
+
+    /// Drop the selection once the dashboard shows a different set of
+    /// hosts than the one it was built in (issue #230 follow-up). Every
+    /// verb then acts on the same hosts: before this, Connect and Delete
+    /// read the visible order while Move, the drag and the count read
+    /// the raw ids, so a host picked in "Prod" travelled with a Move
+    /// issued from "Dev". Called from the update funnel.
+    pub(crate) fn rescope_dash_selection(&mut self) {
+        // Compared field by field against the live inputs first: this
+        // runs after every update (each PTY batch included), and building
+        // a scope allocates the search and the tag list.
+        let current = &self.dash_selection.scope;
+        if current.group == self.active_group
+            && current.view_mode == self.prefs.host_view_mode
+            && current.cloud_profile == self.host_filter_cloud_profile
+            && current.search == self.host_search.trim()
+            && current.tags == self.host_filter_tags
+        {
+            return;
+        }
+        let scope = self.dash_selection_scope();
+        self.dash_selection.rescope(scope);
+    }
+
     /// The selected hosts, in the order the dashboard is showing them.
     /// Every batch action reads the selection through this - the tabs a
-    /// batch connect opens, the hosts a batch delete removes, and the
-    /// labels the card menu and the remove dialog spell out - so they all
-    /// land in the order the eye reads them.
+    /// batch connect opens, the hosts a batch delete removes or moves,
+    /// the count on the bar, what a drag carries, and the labels the
+    /// card menu and the remove dialog spell out - so they all act on
+    /// the same hosts and land in the order the eye reads them. In Tree
+    /// mode that is the tree walk's order, nested folders included.
     pub(crate) fn selected_hosts_in_view_order(&self) -> Vec<Uuid> {
-        self.dashboard_host_order()
+        self.dashboard_visible_host_order()
             .into_iter()
             .map(|i| self.connections[i].id)
             .filter(|id| self.dash_selection.contains(*id))
@@ -264,7 +309,7 @@ impl Oryxis {
             return false;
         };
         let order: Vec<Uuid> = self
-            .dashboard_host_order()
+            .dashboard_visible_host_order()
             .into_iter()
             .map(|i| self.connections[i].id)
             .collect();
@@ -288,6 +333,21 @@ impl Oryxis {
         {
             return Task::none();
         }
+        // The host editor may be open on one of the hosts: persist what it
+        // holds first (an interrupted flush, so a half-typed Parent Group
+        // is not materialized), and remember whether anything is still
+        // pending, so the form can follow the move afterwards without
+        // either reverting it or dropping the user's other edits.
+        let editing_moved = self
+            .editor_form
+            .editing_id
+            .is_some_and(|e| ids.contains(&e));
+        let editor_was_dirty = if editing_moved {
+            self.editor_flush_interrupted();
+            self.editor_autosave_dirty()
+        } else {
+            false
+        };
         let mut moved = 0usize;
         let mut failed = 0usize;
         for conn in self.connections.iter_mut().filter(|c| ids.contains(&c.id)) {
@@ -306,6 +366,9 @@ impl Oryxis {
                 },
                 None => failed += 1,
             }
+        }
+        if editing_moved {
+            self.editor_follow_moved_host(editor_was_dirty);
         }
         self.dash_selection.clear();
         if failed > 0 {
@@ -337,11 +400,14 @@ impl Oryxis {
     pub(crate) fn arm_card_drag(&mut self, id: Uuid) {
         self.hover.folder_card = None;
         self.hover.folder_back = false;
+        // Through the visible order, like every other verb, so the drag
+        // carries exactly the hosts the bar counts.
         let ids = if self.dash_selection.contains(id) {
-            self.dash_selection.ids.clone()
+            self.selected_hosts_in_view_order()
         } else {
             vec![id]
         };
+        let ids = if ids.is_empty() { vec![id] } else { ids };
         let label = if ids.len() == 1 {
             self.connections
                 .iter()
@@ -368,13 +434,16 @@ impl Oryxis {
     pub(crate) fn card_drop_target(&self) -> Option<Option<Uuid>> {
         if self.hover.folder_back {
             let open = self.active_group?;
-            let parent = self
-                .groups
-                .iter()
-                .find(|g| g.id == open)
-                .and_then(|g| g.parent_id)
-                .filter(|pid| self.groups.iter().any(|g| g.id == *pid && g.cloud_query.is_none()));
-            return Some(parent);
+            let parent = self.groups.iter().find(|g| g.id == open).and_then(|g| g.parent_id);
+            return match parent.and_then(|pid| self.groups.iter().find(|g| g.id == pid)) {
+                // A dynamic parent's contents come from its query: the
+                // drop is refused, never redirected to the top level.
+                Some(p) if p.cloud_query.is_some() => None,
+                Some(p) => Some(Some(p.id)),
+                // No parent, or one that no longer resolves (the
+                // dashboard shows such a folder at the top level).
+                None => Some(None),
+            };
         }
         let gid = self.hover.folder_card?;
         self.groups

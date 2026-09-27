@@ -164,6 +164,9 @@ impl Oryxis {
                 self.connections.iter().map(|c| c.id).collect();
             self.dash_selection.prune(|id| alive.contains(&id));
         }
+        // A selection belongs to the folder / search / filter / view mode
+        // it was built in; leaving that scope ends it.
+        self.rescope_dash_selection();
         // The multi-select mode is a DASHBOARD gesture, and its toggle
         // only exists in the host toolbar. Leaving the view drops it, so
         // the next visit starts on click-connects; a mode that survived

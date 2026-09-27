@@ -9,9 +9,10 @@
 use uuid::Uuid;
 
 /// The selected host cards. Session-only, cleared by Esc, by a plain
-/// click, by every move, and by a view change (`prune` drops ids the
-/// list no longer has, so a host deleted elsewhere cannot linger in
-/// the count).
+/// click, by every move, by a view change, and by leaving the folder,
+/// search, filter or view mode it was built in (`rescope`); `prune`
+/// drops ids the list no longer has, so a host deleted elsewhere
+/// cannot linger in the count.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DashSelection {
     /// Selected ids in the order they were added.
@@ -19,15 +20,29 @@ pub(crate) struct DashSelection {
     /// The end a Shift+click extends from: the last card toggled on
     /// by a plain toggle, so a range reads the way file managers do.
     pub(crate) anchor: Option<Uuid>,
+    /// What the dashboard was showing when the selection was built. A
+    /// selection belongs to ONE view of the hosts: leaving it (another
+    /// folder, another search, another filter, another view mode) ends
+    /// it, so no verb can act on hosts the user picked somewhere they no
+    /// longer are. See `rescope`.
+    pub(crate) scope: SelectionScope,
+}
+
+/// The inputs that decide which hosts the dashboard shows. Two equal
+/// scopes show the same rows (up to a tree fold, which the batch verbs
+/// answer by reading the selection through the visible order).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SelectionScope {
+    pub(crate) group: Option<Uuid>,
+    pub(crate) search: String,
+    pub(crate) view_mode: crate::state::HostViewMode,
+    pub(crate) cloud_profile: Option<Uuid>,
+    pub(crate) tags: Vec<String>,
 }
 
 impl DashSelection {
     pub(crate) fn is_empty(&self) -> bool {
         self.ids.is_empty()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.ids.len()
     }
 
     pub(crate) fn contains(&self, id: Uuid) -> bool {
@@ -61,6 +76,18 @@ impl DashSelection {
     pub(crate) fn clear(&mut self) {
         self.ids.clear();
         self.anchor = None;
+    }
+
+    /// Follow the dashboard to `scope`: a selection built under another
+    /// scope is dropped. `true` when that cleared something.
+    pub(crate) fn rescope(&mut self, scope: SelectionScope) -> bool {
+        if self.scope == scope {
+            return false;
+        }
+        self.scope = scope;
+        let had = !self.ids.is_empty();
+        self.clear();
+        had
     }
 
     /// Drop every id that is no longer a connection.
@@ -106,6 +133,26 @@ mod tests {
         sel.toggle(a);
         assert!(sel.is_empty());
         assert_eq!(sel.anchor, None);
+    }
+
+    #[test]
+    fn a_new_scope_drops_the_selection_and_the_same_one_keeps_it() {
+        let a = Uuid::new_v4();
+        let mut sel = DashSelection::default();
+        sel.toggle(a);
+        assert!(!sel.rescope(SelectionScope::default()));
+        assert_eq!(sel.ids, vec![a]);
+        let folder = SelectionScope { group: Some(Uuid::new_v4()), ..Default::default() };
+        assert!(sel.rescope(folder.clone()));
+        assert!(sel.is_empty());
+        assert_eq!(sel.anchor, None);
+        // Selecting inside the new scope is kept while it holds.
+        sel.toggle(a);
+        assert!(!sel.rescope(folder.clone()));
+        assert_eq!(sel.ids, vec![a]);
+        let searched = SelectionScope { search: "db".into(), ..folder };
+        assert!(sel.rescope(searched));
+        assert!(sel.is_empty());
     }
 
     #[test]

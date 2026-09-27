@@ -424,9 +424,9 @@ impl Oryxis {
                         Some(Self::vault_locked_status("ssh config import"));
                     return Task::none();
                 }
-                let Some(vault) = &self.vault else {
+                if self.vault.is_none() {
                     return Task::none();
-                };
+                }
                 // Where the batch lands (issue #230): the folder that
                 // was open when the hub was opened, consumed here so it
                 // cannot outlive this import. Stamped just before the
@@ -436,7 +436,10 @@ impl Oryxis {
                 // (`~/.ssh/config` has none; mRemoteNG's and the CSV
                 // group column ride `notes`), so there is nothing to
                 // out-rank.
-                let target_group = self.import_target_group.take();
+                let target_group = self.take_import_target_group();
+                let Some(vault) = &self.vault else {
+                    return Task::none();
+                };
                 // Third-party batch (PuTTY, ...): already Connections,
                 // no alias pass; same transaction shape as below.
                 if let Some(direct) = self.ssh_import_direct.take() {
@@ -639,11 +642,16 @@ impl Oryxis {
                 if let (Some(vault), Some(data)) = (&self.vault, &self.vault_import.file_data) {
                     // The folder the hub was opened in, when the file
                     // arrived through it (issue #230); `None` from the
-                    // Security cards. Consumed either way so a later
-                    // import cannot inherit it.
-                    let target_group = self.import_target_group.take();
+                    // Security cards. Consumed only by an import that
+                    // LANDED: a wrong password or a write error leaves the
+                    // dialog up for another try, which must still land
+                    // where the first one would have. Every dismiss of the
+                    // dialog clears it, so a later import cannot inherit
+                    // it.
+                    let target_group = self.live_import_target_group();
                     match oryxis_vault::import_vault(vault, data, &self.vault_import.password, &self.vault_import.selection, target_group) {
                         Ok(result) => {
+                            self.import_target_group = None;
                             // Fully translated summary, built from the
                             // same category labels the dialog uses. Only
                             // non-zero families are listed to keep it short.
@@ -1077,11 +1085,31 @@ impl Oryxis {
     /// the vault side ignores an unknown target too, so the dialog
     /// must not promise a folder the rows will not reach.
     pub(crate) fn import_target_folder_path(&self) -> Option<String> {
-        let gid = self.import_target_group?;
-        self.groups
-            .iter()
-            .any(|g| g.id == gid)
-            .then(|| oryxis_core::models::Group::path_of(&self.groups, gid))
+        let gid = self.live_import_target_group()?;
+        Some(oryxis_core::models::Group::path_of(&self.groups, gid))
+    }
+
+    /// The import's target folder as it stands NOW: the snapshot taken
+    /// when the hub opened, re-checked against the folders that exist at
+    /// this moment. A folder deleted (or turned dynamic) in between, by
+    /// sync or on this device, resolves to the top level rather than
+    /// being stamped as a dangling `group_id` that would leave the
+    /// imported hosts invisible on the dashboard. The dialogs' "Into
+    /// folder" line and the confirm read the same answer.
+    pub(crate) fn live_import_target_group(&self) -> Option<uuid::Uuid> {
+        self.import_target_group.filter(|gid| {
+            self.groups
+                .iter()
+                .any(|g| g.id == *gid && g.cloud_query.is_none())
+        })
+    }
+
+    /// Consume the import's target folder, re-checked
+    /// (`live_import_target_group`).
+    fn take_import_target_group(&mut self) -> Option<uuid::Uuid> {
+        let live = self.live_import_target_group();
+        self.import_target_group = None;
+        live
     }
 
     fn open_sftp_backup_picker(&mut self, is_import: bool) {

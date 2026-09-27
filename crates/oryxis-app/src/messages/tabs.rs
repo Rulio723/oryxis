@@ -312,6 +312,9 @@ pub enum TabsMessage {
     /// Selection bar: connect every selected host, each in its own tab
     /// (batch connect).
     SelectionConnect,
+    /// Connection card: drop the hosts a batch connect has not dialled
+    /// yet. The dial in flight (or the failed card) is left alone.
+    BatchConnectCancelRemaining,
     /// Toolbar: flip the dashboard's multi-select mode (issue #230).
     /// While on, a click on a host card toggles it in the selection
     /// instead of dialling it, so a batch is built by pointing at

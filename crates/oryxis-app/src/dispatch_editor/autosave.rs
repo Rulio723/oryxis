@@ -137,6 +137,36 @@ impl Oryxis {
         self.editor_saved_snapshot = self.editor_form_signature();
     }
 
+    /// The host the editor is open on was just moved to another folder
+    /// by a door other than the editor (the card kebab, the selection
+    /// bar, a drag; `move_hosts_to_group`). The form's Parent Group
+    /// follows the stored row, or the drawer's closing flush would read
+    /// the old path as a pending group edit (`editor_group_pending`)
+    /// and write the host straight back where it came from, with a
+    /// newer `updated_at` that sync would then propagate.
+    ///
+    /// `was_dirty` is the dirty state measured BEFORE the move: a form
+    /// that already matched the vault is re-baselined (the new path is
+    /// the stored value, not an edit), while one still holding edits
+    /// keeps its baseline so those edits are written on the next flush,
+    /// now carrying the folder the host actually lives in.
+    pub(crate) fn editor_follow_moved_host(&mut self, was_dirty: bool) {
+        let Some(id) = self.editor_form.editing_id else {
+            return;
+        };
+        let Some(conn) = self.connections.iter().find(|c| c.id == id) else {
+            return;
+        };
+        self.editor_form.group_name = conn
+            .group_id
+            .filter(|gid| self.groups.iter().any(|g| g.id == *gid))
+            .map(|gid| oryxis_core::models::Group::path_of(&self.groups, gid))
+            .unwrap_or_default();
+        if !was_dirty && self.editor_saved_snapshot.is_some() {
+            self.editor_saved_snapshot = self.editor_form_signature();
+        }
+    }
+
     /// Whether the typed Parent Group value differs from the host's
     /// stored one. Read on its own because a group change can be the
     /// ONLY change (`GroupWrite::Skip` builds the signature, so the

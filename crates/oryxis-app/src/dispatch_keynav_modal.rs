@@ -147,6 +147,12 @@ impl Oryxis {
                     // shared builder, Enter picks the ringed host, and
                     // the search field keeps the caret (`has_input`).
                     | Modal::SyncHostPicker
+                    // The host editor's terminal theme picker: its filter,
+                    // tone chips, cards and Close are recorded in display
+                    // order, Enter picks the ringed card, and the filter
+                    // keeps the caret (`has_input`). No default row: a
+                    // stray Enter must not change the host's theme.
+                    | Modal::ThemePicker
                     // The highlight-rule editor is a form, but it walks
                     // like a confirm: Tab / arrows step its rows, Enter
                     // fires the default (Save). Its text fields keep the
@@ -196,6 +202,8 @@ impl Oryxis {
                     | Modal::HighlightRuleEditor
                     // The host picker's search field.
                     | Modal::SyncHostPicker
+                    // The theme picker's filter field.
+                    | Modal::ThemePicker
             )
         )
     }

@@ -1044,6 +1044,7 @@ fn import_lands_in_the_target_folder() {
     let target = unlocked_vault();
     let prod = Group::new("Prod");
     target.save_group(&prod).unwrap();
+    let before_import = chrono::Utc::now();
     let result = import_vault(&target, &data, "pw", &ExportSelection::all(), Some(prod.id)).unwrap();
     assert_eq!(result.connections_added, 2);
     assert_eq!(result.groups_added, 1);
@@ -1060,6 +1061,13 @@ fn import_lands_in_the_target_folder() {
     let imported_sub = groups.iter().find(|g| g.id == sub.id).unwrap();
     assert_eq!(imported_sub.parent_id, Some(prod.id));
     assert_eq!(groups.iter().find(|g| g.id == prod.id).unwrap().parent_id, None);
+
+    // What the placement pass rewrote is stamped at the import, so it
+    // out-ranks the source device's copy under last-writer-wins instead
+    // of tying with it; what it left alone keeps the file's stamp.
+    assert!(by_label("loose").updated_at >= before_import);
+    assert!(imported_sub.updated_at >= before_import);
+    assert_eq!(by_label("filed").updated_at, filed.updated_at);
 }
 
 /// A host the vault already knows keeps the placement its newer copy

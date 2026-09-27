@@ -519,6 +519,19 @@ impl Oryxis {
         host_order
     }
 
+    /// The host rows on screen in the ACTIVE view mode, in display
+    /// order: the tree walk's host entries in Tree mode (nested folders
+    /// included, collapsed ones not), `dashboard_host_order` otherwise.
+    /// Every selection verb reads the hosts through this, so a batch
+    /// acts on exactly the rows the user can see and pick.
+    pub(crate) fn dashboard_visible_host_order(&self) -> Vec<usize> {
+        if self.prefs.host_view_mode == crate::state::HostViewMode::Tree {
+            self.dashboard_tree_host_order()
+        } else {
+            self.dashboard_host_order()
+        }
+    }
+
     /// The bar over the grid while the selection is live: the count,
     /// "Connect", "Move to group" and "Delete" for the selection, then
     /// select every visible host, clear. Its buttons are toolbar items on
@@ -550,7 +563,11 @@ impl Oryxis {
     /// describing. The accent lives in the count's glyph and text and in
     /// Connect, where it points at something.
     fn dashboard_selection_bar(&self) -> Element<'_, Message> {
-        let n = self.dash_selection.len();
+        // The count and the Move button read the same list every other
+        // verb does (`selected_hosts_in_view_order`), so the bar never
+        // counts a host a batch would skip.
+        let selected = self.selected_hosts_in_view_order();
+        let n = selected.len();
         let any = n > 0;
         // The count, led by the same glyph the toolbar's mode button
         // wears: the bar says what it is counting before the words are
@@ -600,9 +617,7 @@ impl Oryxis {
             crate::keynav::ToolbarItem::SelectionMove,
             crate::widgets::styled_button_owned(
                 t("move_to_group").to_string(),
-                any.then_some(Message::Tabs(TabsMessage::MoveHostsPick(
-                    self.dash_selection.ids.clone(),
-                ))),
+                any.then_some(Message::Tabs(TabsMessage::MoveHostsPick(selected))),
                 OryxisColors::t().bg_hover,
             ),
         );

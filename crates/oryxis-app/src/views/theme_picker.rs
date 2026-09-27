@@ -2,6 +2,11 @@
 //! row in the host editor. Renders a column of palette swatch cards;
 //! the first card is the "inherit global theme" sentinel. Selecting a
 //! card commits to `editor_form.terminal_theme` and closes the modal.
+//!
+//! Keyboard: it is `Modal::ThemePicker` on the modal ring. The filter,
+//! the Dark / Light chips, every card and Close record in display
+//! order, so Tab / arrows walk the whole dialog and Enter picks; the
+//! filter keeps the caret (`modal_surface_has_input`).
 
 use iced::border::Radius;
 use iced::widget::{column, container, scrollable, text, Space};
@@ -12,8 +17,13 @@ use crate::i18n::t;
 use crate::theme::OryxisColors;
 use crate::widgets::styled_button;
 
+/// Widget id of the picker's filter field, so the ring's Enter can
+/// focus it.
+const HOST_THEME_PICKER_FILTER_ID: &str = "host-theme-picker-filter";
+
 impl Oryxis {
     pub(crate) fn view_terminal_theme_picker(&self) -> Element<'_, Message> {
+        self.modal_nav_reset();
         // Header, title + short description matching the row in the
         // host editor that opened this modal.
         let header = column![
@@ -35,21 +45,40 @@ impl Oryxis {
         let shows = |label: &str, traits: Option<&[oryxis_terminal::ThemeTrait]>| {
             crate::theme_tags::theme_matches(&picker_filter, picker_tone, label, traits)
         };
+        // Recorded in display order: the filter first (Enter focuses
+        // it), then the chips under it.
+        let filter_id = iced::widget::Id::new(HOST_THEME_PICKER_FILTER_ID);
+        let filter_idx =
+            self.modal_nav_record(crate::keynav::RowAction::input(filter_id.clone()));
+        let filter_input = self.modal_nav_ring_at(
+            filter_idx,
+            8.0,
+            false,
+            iced::widget::text_input(t("filter_placeholder"), &self.theme_ui.picker_filter)
+                .id(filter_id)
+                .on_input(|v| Message::Editor(EditorMessage::EditorThemePickerFilterChanged(v)))
+                .padding(10)
+                .size(13)
+                .style(crate::widgets::rounded_input_style)
+                .into(),
+        );
         let tone_chips: Vec<Element<'_, Message>> = crate::theme_tags::TONE_CHOICES
             .iter()
             .map(|(tone, key)| {
                 let msg = Message::Editor(EditorMessage::EditorThemePickerToneChanged(*tone));
-                crate::theme_tags::tone_chip(t(key), picker_tone == *tone, msg)
+                self.modal_nav_slot(
+                    crate::keynav::RowAction::activate(msg.clone()),
+                    14.0,
+                    false,
+                    crate::theme_tags::tone_chip(t(key), picker_tone == *tone, msg),
+                )
             })
             .collect();
-        let filter_input = iced::widget::text_input(
-            t("filter_placeholder"),
-            &self.theme_ui.picker_filter,
-        )
-        .on_input(|v| Message::Editor(EditorMessage::EditorThemePickerFilterChanged(v)))
-        .padding(10)
-        .size(13)
-        .style(crate::widgets::rounded_input_style);
+        // Every card records its own pick on the ring, in the order the
+        // column shows them.
+        let card = |el: Element<'static, Message>, pick: Message| -> Element<'static, Message> {
+            self.modal_nav_slot(crate::keynav::RowAction::activate(pick), 10.0, false, el)
+        };
 
         // Cards, first row is the inherit sentinel, the rest are
         // real palette previews. Click commits + closes via the
@@ -69,11 +98,15 @@ impl Oryxis {
         );
         let global_traits = global_palette.traits();
         if shows(&inherit_label, Some(&global_traits)) {
-            cards.push(crate::widgets::terminal_theme_card(
-                global_palette,
-                &inherit_label,
-                self.editor_form.terminal_theme.is_none(),
-                Message::Editor(EditorMessage::EditorTerminalThemeChanged(String::new())),
+            let pick = Message::Editor(EditorMessage::EditorTerminalThemeChanged(String::new()));
+            cards.push(card(
+                crate::widgets::terminal_theme_card(
+                    global_palette,
+                    &inherit_label,
+                    self.editor_form.terminal_theme.is_none(),
+                    pick.clone(),
+                ),
+                pick,
             ));
         }
         for theme in oryxis_terminal::TerminalTheme::ALL.iter() {
@@ -83,11 +116,16 @@ impl Oryxis {
             }
             let is_selected =
                 self.editor_form.terminal_theme.as_deref() == Some(theme.name());
-            cards.push(crate::widgets::terminal_theme_card(
-                theme.palette(),
-                theme.name(),
-                is_selected,
-                Message::Editor(EditorMessage::EditorTerminalThemeChanged(theme.name().to_string())),
+            let pick =
+                Message::Editor(EditorMessage::EditorTerminalThemeChanged(theme.name().to_string()));
+            cards.push(card(
+                crate::widgets::terminal_theme_card(
+                    theme.palette(),
+                    theme.name(),
+                    is_selected,
+                    pick.clone(),
+                ),
+                pick,
             ));
         }
         // User-defined themes, selectable per host like the built-ins.
@@ -99,11 +137,10 @@ impl Oryxis {
             }
             let is_selected =
                 self.editor_form.terminal_theme.as_deref() == Some(ct.name.as_str());
-            cards.push(crate::widgets::terminal_theme_card(
-                palette,
-                &ct.name,
-                is_selected,
-                Message::Editor(EditorMessage::EditorTerminalThemeChanged(ct.name.clone())),
+            let pick = Message::Editor(EditorMessage::EditorTerminalThemeChanged(ct.name.clone()));
+            cards.push(card(
+                crate::widgets::terminal_theme_card(palette, &ct.name, is_selected, pick.clone()),
+                pick,
             ));
         }
 
@@ -117,10 +154,12 @@ impl Oryxis {
         )
         .height(Length::Fill);
 
-        let close_btn = styled_button(
-            t("close"),
-            Message::Editor(EditorMessage::EditorCloseThemePicker),
-            OryxisColors::t().bg_hover,
+        let close_msg = Message::Editor(EditorMessage::EditorCloseThemePicker);
+        let close_btn = self.modal_nav_slot(
+            crate::keynav::RowAction::activate(close_msg.clone()),
+            8.0,
+            false,
+            styled_button(t("close"), close_msg, OryxisColors::t().bg_hover),
         );
         // Dismiss action hugs the trailing edge (dialog convention),
         // mirrored under RTL.

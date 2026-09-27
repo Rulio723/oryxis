@@ -927,7 +927,7 @@ impl Oryxis {
                 Message::Tabs(TabsMessage::SelectionConnect)
             }
             (View::Dashboard, ToolbarItem::SelectionMove) => {
-                Message::Tabs(TabsMessage::MoveHostsPick(self.dash_selection.ids.clone()))
+                Message::Tabs(TabsMessage::MoveHostsPick(self.selected_hosts_in_view_order()))
             }
             (View::Dashboard, ToolbarItem::SelectionDelete) => {
                 Message::Tabs(TabsMessage::SelectionDelete)

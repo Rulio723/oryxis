@@ -549,6 +549,38 @@ impl Oryxis {
             (status, self.view_connection_log_timeline(progress, failed, pulse), self.view_connection_log_buttons(progress, failed))
         };
 
+        // A batch connect still owes dials (issue #230): say how many and
+        // offer to drop them, in every state of the card, so a batch of
+        // thirty hosts can be stopped without sitting through each one.
+        // The dial on screen stays the user's to finish or close.
+        let bottom: Element<'_, Message> = if self.batch_dials.is_empty() {
+            bottom
+        } else {
+            let queued = text(
+                crate::i18n::t("batch_connect_queued")
+                    .replace("{hosts}", &crate::i18n::host_count(self.batch_dials.len())),
+            )
+            .size(12)
+            .color(OryxisColors::t().text_muted);
+            let cancel = crate::widgets::styled_button(
+                crate::i18n::t("batch_connect_cancel_remaining"),
+                Message::Tabs(crate::app::TabsMessage::BatchConnectCancelRemaining),
+                OryxisColors::t().bg_hover,
+            );
+            column![
+                crate::widgets::dir_row(vec![
+                    queued.into(),
+                    Space::new().width(Length::Fill).into(),
+                    cancel,
+                ])
+                .align_y(iced::Alignment::Center),
+                Space::new().height(12),
+                bottom,
+            ]
+            .width(Length::Fill)
+            .into()
+        };
+
         container(
             column![
                 header,
