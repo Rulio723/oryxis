@@ -1602,7 +1602,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "تحديد متعدد",
         "hosts_moved" => "تم نقل {hosts} إلى {group}",
         "hosts_move_failed" => "تعذّر نقل بعض المضيفين. حاول مرة أخرى.",
-        "select_host" => "تحديد",
         "new_group" => "مجموعة جديدة",
         "back" => "رجوع",
         "group_icon_color" => "الأيقونة واللون",

@@ -1581,7 +1581,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "Çoklu seçim",
         "hosts_moved" => "{hosts} {group} grubuna taşındı",
         "hosts_move_failed" => "Bazı sunucular taşınamadı. Yeniden deneyin.",
-        "select_host" => "Seç",
         "new_group" => "Yeni grup",
         "back" => "Geri",
         "group_icon_color" => "Simge ve renk",

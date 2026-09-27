@@ -1587,7 +1587,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "Πολλαπλή επιλογή",
         "hosts_moved" => "{hosts} μετακινήθηκαν σε {group}",
         "hosts_move_failed" => "Ορισμένοι κόμβοι δεν μετακινήθηκαν. Δοκιμάστε ξανά.",
-        "select_host" => "Επιλογή",
         "new_group" => "Νέα ομάδα",
         "back" => "Πίσω",
         "group_icon_color" => "Εικονίδιο & χρώμα",

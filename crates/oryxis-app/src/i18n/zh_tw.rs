@@ -1490,7 +1490,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "多選",
         "hosts_moved" => "已將 {hosts} 移動到 {group}",
         "hosts_move_failed" => "部分主機無法移動，請重試。",
-        "select_host" => "選取",
         "new_group" => "新增群組",
         "back" => "返回",
         "group_icon_color" => "圖示與顏色",

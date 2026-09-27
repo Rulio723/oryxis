@@ -14,11 +14,12 @@ project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 - Theme cards carry measured tags (dark, light, warm, high contrast...), and every theme picker has Dark / Light chips and a tag search (#230).
 - Restored tabs can connect at launch, one after another, and the app can open on the tab that was active (#229, requested by @nAnderYang).
 - Alibaba Cloud (ECS + ACK) and Tencent Cloud (CVM + TKE) accounts, as plugins over the `aliyun` and `tccli` CLIs you already configured.
-- ACK and TKE clusters add as Kubernetes accounts, with the kubeconfig stored per cluster under `~/.oryxis/kubeconfig/` and refreshable from the same row.
+- ACK and TKE clusters add as Kubernetes accounts, with a kubeconfig per cluster and cloud account under `~/.oryxis/kubeconfig/`, refreshable from the same row and removed with the account.
 - Settings > Sync installs the relay on a vault host over SSH, as a systemd service with optional Caddy TLS, after showing every command it will run.
 
 ### Changed
 - An `sz` download honours "Ask where to save downloads", and starts receiving at once so the dialog no longer races the remote `sz` timeout (#230, requested by @ziyouwa).
+- Files an interrupted `sz` left behind are offered in a "Save to folder" dialog on the next launch, never moved unasked.
 - The password popup reaches `sudo` / `su` prompts inside tmux and GNU screen (#232, requested by @anojoyman).
 - Ctrl + wheel zoom is a shortcut: rebind or remove it in Settings > Shortcuts, or use the switch beside the terminal font size (#225, requested by @411A).
 - A touchpad pinch zooms the terminal font on macOS and Wayland as the same shortcut.
@@ -26,12 +27,15 @@ project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 - The relay's systemd unit runs hardened, and relay releases ship Ed25519-signed Linux binaries with a `relay.json` manifest.
 - The Sync host picker answers Esc and the keyboard like every other dialog.
 - The MCP plugin 0.1.4 serves requests concurrently, honours cancel and keeps one login per host (#227, reported by @Ing-Tek).
+- The MCP plugin 0.1.5 reaches hosts behind jump hosts, each hop with its own credentials, and a refused channel no longer costs the pooled login.
+- The connection progress card works from the keyboard (Tab, arrows, Enter), and its buttons respond to hover and press.
 
 ### Fixed
 - The tab bar keeps a drag handle, so the window can still be moved once the tabs fill the bar (#226, reported by @moliyadi).
 - Pairing advertises the device name set in Settings instead of the generated one (#224, by @mediclab).
 - The sync passphrase edit has a reveal eye, and the recovery hint names what to check first (#228, by @shideqin).
 - The first-run features list no longer hides its toggles under the scrollbar (#231, reported by @Regsit).
+- Each jump host answers a keyboard-interactive prompt with its own stored TOTP secret; the target's one-time code is only ever sent to the target.
 
 ## [0.18.0] - 2026-09-09
 

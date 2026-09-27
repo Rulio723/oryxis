@@ -1581,7 +1581,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "Множинний вибір",
         "hosts_moved" => "{hosts} переміщено до {group}",
         "hosts_move_failed" => "Деякі хости не вдалося перемістити. Спробуйте ще раз.",
-        "select_host" => "Вибрати",
         "new_group" => "Нова група",
         "back" => "Назад",
         "group_icon_color" => "Значок і колір",

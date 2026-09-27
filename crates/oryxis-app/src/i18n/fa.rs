@@ -1572,7 +1572,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "انتخاب چندگانه",
         "hosts_moved" => "{hosts} به {group} منتقل شد",
         "hosts_move_failed" => "برخی میزبان‌ها منتقل نشدند. دوباره تلاش کنید.",
-        "select_host" => "انتخاب",
         "new_group" => "گروه جدید",
         "back" => "بازگشت",
         "group_icon_color" => "نماد و رنگ",

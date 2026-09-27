@@ -1588,7 +1588,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "เลือกหลายรายการ",
         "hosts_moved" => "ย้าย {hosts} ไปยัง {group} แล้ว",
         "hosts_move_failed" => "ย้ายโฮสต์บางรายการไม่สำเร็จ โปรดลองอีกครั้ง",
-        "select_host" => "เลือก",
         "new_group" => "กลุ่มใหม่",
         "back" => "ย้อนกลับ",
         "group_icon_color" => "ไอคอนและสี",

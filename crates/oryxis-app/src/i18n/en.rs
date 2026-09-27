@@ -1588,7 +1588,6 @@ pub(super) fn lookup(key: &str) -> &'static str {
         "multi_select" => "Multi-select",
         "hosts_moved" => "Moved {hosts} to {group}",
         "hosts_move_failed" => "Some hosts could not be moved. Please try again.",
-        "select_host" => "Select",
         "new_group" => "New group",
         "back" => "Back",
         "group_icon_color" => "Icon & color",

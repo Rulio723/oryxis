@@ -1587,7 +1587,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "Vícenásobný výběr",
         "hosts_moved" => "{hosts} přesunuto do {group}",
         "hosts_move_failed" => "Některé hostitele se nepodařilo přesunout. Zkuste to znovu.",
-        "select_host" => "Vybrat",
         "new_group" => "Nová skupina",
         "back" => "Zpět",
         "group_icon_color" => "Ikona a barva",

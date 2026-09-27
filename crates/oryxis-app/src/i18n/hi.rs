@@ -1587,7 +1587,6 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "multi_select" => "बहु-चयन",
         "hosts_moved" => "{hosts} को {group} में ले जाया गया",
         "hosts_move_failed" => "कुछ होस्ट ले जाए नहीं जा सके। फिर से कोशिश करें।",
-        "select_host" => "चुनें",
         "new_group" => "नया समूह",
         "back" => "वापस",
         "group_icon_color" => "आइकॉन और रंग",
