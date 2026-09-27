@@ -9,7 +9,7 @@ project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 ### Added
 - A multi-select mode in the host list toolbar: clicks pick cards instead of connecting (#234, by @shideqin).
 - The selection bar connects the picked hosts one at a time, moves them to a folder or removes them behind the usual confirmation (#234).
-- Inside the multi-select mode a search keeps the selection, so one batch can span several searches; the bar says how many picked hosts the search hides.
+- Inside the multi-select mode a search keeps the selection, so one batch can span several searches; the bar says how many picked hosts are out of view.
 - Hosts move between folders without opening the editor: "Move to group" on the card menu, or drag cards onto a folder or the back arrow (#230, requested by @ziyouwa).
 - A host imported from inside a folder lands in that folder, and the import dialogs say which one (#230).
 - Theme cards carry measured tags (dark, light, warm, high contrast...), and every theme picker has Dark / Light chips and a tag search (#230).

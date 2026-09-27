@@ -2463,7 +2463,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "hesap kaydedilmeden önce kasa kilitlendi, bu yüzden indirilen kubeconfig silindi. Kilidi açıp yeniden deneyin.",
         "password_suggest_title_for" => "{target} parolası",
         "zmodem_orphans_busy" => "Aynı klasöre bir indirme alınıyor, bu yüzden hiçbir şey taşınmadı. Bekleyen dosyalar orada kalır ve bir sonraki açılışta yeniden sunulur.",
-        "selection_hidden" => "{n} tanesi aramayla gizlendi",
+        "selection_hidden" => "{n} tanesi gösterilmiyor",
 _ => return None,
     })
 }

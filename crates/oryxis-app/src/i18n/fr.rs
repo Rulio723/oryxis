@@ -2430,7 +2430,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "le coffre s'est verrouillé avant l'enregistrement du compte, le kubeconfig téléchargé a donc été supprimé. Déverrouillez et réessayez.",
         "password_suggest_title_for" => "Mot de passe de {target}",
         "zmodem_orphans_busy" => "Un téléchargement est en cours de réception dans le même dossier, rien n'a donc été déplacé. Les fichiers en attente y restent et seront proposés à nouveau au prochain lancement.",
-        "selection_hidden" => "{n} masqués par la recherche",
+        "selection_hidden" => "{n} non affichés",
 _ => return None,
     })
 }

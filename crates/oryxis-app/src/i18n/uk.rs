@@ -2463,7 +2463,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "сховище заблокувалося до збереження облікового запису, тому завантажений kubeconfig видалено. Розблокуйте й спробуйте ще раз.",
         "password_suggest_title_for" => "Пароль для {target}",
         "zmodem_orphans_busy" => "У ту саму теку зараз приймається завантаження, тому нічого не переміщено. Файли, що очікують, залишаються там і будуть запропоновані знову під час наступного запуску.",
-        "selection_hidden" => "{n} приховано пошуком",
+        "selection_hidden" => "{n} не показано",
 _ => return None,
     })
 }

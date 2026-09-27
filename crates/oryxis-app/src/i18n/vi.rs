@@ -2464,7 +2464,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "kho đã khóa trước khi lưu được tài khoản, nên kubeconfig đã tải về bị loại bỏ. Hãy mở khóa và thử lại.",
         "password_suggest_title_for" => "Mật khẩu cho {target}",
         "zmodem_orphans_busy" => "Một bản tải xuống đang được nhận vào cùng thư mục nên không có gì được di chuyển. Các tệp đang chờ vẫn nằm ở đó và sẽ được đề nghị lại ở lần khởi động tiếp theo.",
-        "selection_hidden" => "{n} bị ẩn bởi tìm kiếm",
+        "selection_hidden" => "{n} không hiển thị",
 _ => return None,
     })
 }

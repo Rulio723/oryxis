@@ -566,7 +566,7 @@ impl Oryxis {
         // The count and the Move button read the same list every other
         // verb does (`selected_hosts_in_view_order`), so the bar never
         // counts a host a batch would skip.
-        let selected = self.selected_hosts_in_view_order();
+        let (selected, hidden) = self.selected_hosts_split();
         let n = selected.len();
         let any = n > 0;
         // The count, led by the same glyph the toolbar's mode button
@@ -585,11 +585,10 @@ impl Oryxis {
                 .into(),
         ])
         .align_y(iced::Alignment::Center);
-        // Hosts the search hides but the selection still holds (the
-        // multi-select mode keeps them): said next to the count, so a
-        // batch never acts on something the user cannot see without
-        // being told.
-        let hidden = self.selected_hosts_hidden();
+        // Selected hosts the view does not show (a search, or a folded
+        // folder in Tree mode; the multi-select mode keeps them): said
+        // next to the count, so a batch never acts on something the user
+        // cannot see without being told.
         let count = if hidden > 0 {
             dir_row(vec![
                 count.into(),

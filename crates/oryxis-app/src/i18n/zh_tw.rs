@@ -2431,7 +2431,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "儲存帳戶前保險庫已鎖定，已捨棄下載的 kubeconfig。請解鎖後再試一次。",
         "password_suggest_title_for" => "{target} 的密碼",
         "zmodem_orphans_busy" => "同一個資料夾正在接收下載，因此沒有移動任何檔案。等待中的檔案會留在那裡，並在下次啟動時再次提供。",
-        "selection_hidden" => "{n} 個被搜尋隱藏",
+        "selection_hidden" => "{n} 個未顯示",
 _ => return None,
     })
 }

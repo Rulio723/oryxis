@@ -1870,6 +1870,11 @@ where
 /// rule as `whole_notches`: a pinch that changes direction responds at
 /// once instead of paying off the stale remainder first.
 fn pinch_step(prev: f32, delta: f32, step: f32) -> (Option<(PinchDirection, u32)>, f32) {
+    // The delta comes from the OS: a NaN or an infinity from a confused
+    // driver is dropped whole rather than zooming, or looping, on it.
+    if !delta.is_finite() {
+        return (None, if prev.is_finite() { prev } else { 0.0 });
+    }
     let acc = if prev != 0.0 && delta != 0.0 && prev.signum() != delta.signum() {
         delta
     } else {
@@ -1881,8 +1886,14 @@ fn pinch_step(prev: f32, delta: f32, step: f32) -> (Option<(PinchDirection, u32)
     }
     let rest = acc - acc.signum() * whole * step;
     let direction = if acc > 0.0 { PinchDirection::Out } else { PinchDirection::In };
-    (Some((direction, whole as u32)), rest)
+    // The same ceiling the app applies to a replayed zoom: one event is
+    // never worth more than a few dozen steps, and the widget's own
+    // scroll loop runs this many times.
+    (Some((direction, whole.min(MAX_PINCH_STEPS) as u32)), rest)
 }
+
+/// Most whole steps one pinch event may report.
+const MAX_PINCH_STEPS: f32 = 64.0;
 
 #[cfg(test)]
 mod pinch_tests {
@@ -1908,6 +1919,14 @@ mod pinch_tests {
         let (d, r) = pinch_step(0.0, -0.21, STEP);
         assert_eq!(d, Some((PinchDirection::In, 2)));
         assert!((r + 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_confused_delta_is_dropped_and_a_huge_one_is_capped() {
+        assert_eq!(pinch_step(0.04, f32::NAN, STEP), (None, 0.04));
+        assert_eq!(pinch_step(0.0, f32::INFINITY, STEP).0, None);
+        let (d, _) = pinch_step(0.0, 1.0e9, STEP);
+        assert_eq!(d, Some((PinchDirection::Out, 64)));
     }
 
     #[test]

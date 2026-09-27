@@ -2469,7 +2469,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "הכספת ננעלה לפני שניתן היה לשמור את החשבון, ולכן ה-kubeconfig שהורד נמחק. בטלו את הנעילה ונסו שוב.",
         "password_suggest_title_for" => "סיסמה עבור {target}",
         "zmodem_orphans_busy" => "הורדה מתקבלת כעת לאותה תיקייה, ולכן שום דבר לא הועבר. הקבצים הממתינים נשארים שם ויוצעו שוב בהפעלה הבאה.",
-        "selection_hidden" => "{n} מוסתרים על ידי החיפוש",
+        "selection_hidden" => "{n} לא מוצגים",
 _ => return None,
     })
 }

@@ -2472,7 +2472,7 @@ pub(super) fn lookup(key: &str) -> &'static str {
         "cloud_managed_cluster_vault_locked" => "the vault locked before the account could be saved, so the downloaded kubeconfig was discarded. Unlock and try again.",
         "password_suggest_title_for" => "Password for {target}",
         "zmodem_orphans_busy" => "A download is being received into the same folder, so nothing was moved. The waiting files stay there and are offered again at the next launch.",
-        "selection_hidden" => "{n} hidden by the search",
+        "selection_hidden" => "{n} not shown",
         _ => "???",
     }
 }

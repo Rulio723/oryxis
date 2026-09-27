@@ -2468,7 +2468,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "η θυρίδα κλειδώθηκε πριν αποθηκευτεί ο λογαριασμός, οπότε το kubeconfig που λήφθηκε απορρίφθηκε. Ξεκλειδώστε και δοκιμάστε ξανά.",
         "password_suggest_title_for" => "Κωδικός για {target}",
         "zmodem_orphans_busy" => "Μια λήψη παραλαμβάνεται στον ίδιο φάκελο, οπότε δεν μετακινήθηκε τίποτα. Τα αρχεία σε αναμονή παραμένουν εκεί και θα προταθούν ξανά στην επόμενη εκκίνηση.",
-        "selection_hidden" => "{n} κρυμμένα από την αναζήτηση",
+        "selection_hidden" => "{n} δεν εμφανίζονται",
 _ => return None,
     })
 }

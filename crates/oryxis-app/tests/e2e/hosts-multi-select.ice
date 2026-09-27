@@ -120,23 +120,23 @@ expect "2 selected"
 
 # Inside the mode a search narrows the grid but not the selection: a
 # selection spanning the list is built one search at a time, and the
-# bar says how many picked hosts the search is hiding, so a batch never
-# acts on something off screen without the bar saying so.
+# bar says how many picked hosts are off screen, so a batch never acts on
+# something the user cannot see without the bar saying so.
 click #search-dashboard
 type "cache"
 settle 300
 expect "2 selected"
-expect "2 hidden by the search"
+expect "2 not shown"
 click "cache01"
 settle 300
 expect "3 selected"
-expect "2 hidden by the search"
+expect "2 not shown"
 click #search-dashboard
 type ctrl+a
 type backspace
 settle 300
 expect "3 selected"
-absent "hidden by the search"
+absent "not shown"
 
 # Leaving the mode hands the cards back to click-connects, and the
 # selection goes with it - a bar left over hosts that no longer read as

@@ -2432,7 +2432,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cloud_managed_cluster_vault_locked" => "o cofre foi bloqueado antes de a conta ser salva, então o kubeconfig baixado foi descartado. Desbloqueie e tente de novo.",
         "password_suggest_title_for" => "Senha de {target}",
         "zmodem_orphans_busy" => "Um download está sendo recebido na mesma pasta, então nada foi movido. Os arquivos pendentes continuam lá e serão oferecidos de novo na próxima abertura.",
-        "selection_hidden" => "{n} ocultos pela busca",
+        "selection_hidden" => "{n} fora de vista",
 _ => return None,
     })
 }
