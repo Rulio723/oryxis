@@ -290,6 +290,15 @@ impl SshEngine {
         self
     }
 
+    /// This engine as it authenticates a JUMP HOST: identical, except that
+    /// the keyboard-interactive TOTP autofill answers with the hop's own
+    /// secret (`None` = no autofill), never the target's. Offering the
+    /// target's 30 s code to a bastion would hand a live second factor to
+    /// a machine that is not the one it protects.
+    pub(crate) fn for_hop(&self, hop_totp_secret: Option<&str>) -> Self {
+        self.clone().with_totp_secret(hop_totp_secret)
+    }
+
     /// Configure the client-side keepalive interval (zero / `None` disables).
     pub fn with_keepalive(mut self, interval: Option<std::time::Duration>) -> Self {
         self.keepalive_interval = interval.filter(|d| !d.is_zero());

@@ -110,8 +110,17 @@ pub struct ConnectionResolver {
     /// subsequent hops travel inside an SSH-tunneled `direct-tcpip`
     /// channel where a proxy doesn't apply.
     pub proxies: std::collections::HashMap<uuid::Uuid, ProxyConfig>,
+    /// Per-jump-host stored TOTP secret, keyed like `passwords`. A hop
+    /// answers its own keyboard-interactive OTP round with its own code;
+    /// the engine's `totp` (the TARGET's secret) is never offered to a
+    /// bastion. Empty = no hop autofills.
+    pub totp_secrets: std::collections::HashMap<uuid::Uuid, String>,
 }
 
+/// `Clone` exists for one purpose: authenticating a jump host with the
+/// same engine configured for THAT hop (`for_hop`), rather than threading
+/// a per-hop override through every auth helper.
+#[derive(Clone)]
 pub struct SshEngine {
     host_key_check: Option<HostKeyCheckCallback>,
     host_key_ask_tx: Option<HostKeyAskSender>,
@@ -362,6 +371,20 @@ mod tests {
 
     fn test_totp() -> oryxis_core::totp::Totp {
         oryxis_core::totp::Totp::parse("JBSWY3DPEHPK3PXP").unwrap()
+    }
+
+    /// A jump host never answers its OTP round with the target's secret:
+    /// `for_hop` swaps in the hop's own (or none at all).
+    #[test]
+    fn a_hop_never_carries_the_targets_totp() {
+        let engine = SshEngine::new().with_totp_secret(Some("JBSWY3DPEHPK3PXP"));
+        assert!(engine.totp.is_some());
+        assert!(engine.for_hop(None).totp.is_none());
+        let hop = engine.for_hop(Some("GEZDGNBVGY3TQOJQ"));
+        let hop_totp = oryxis_core::totp::Totp::parse("GEZDGNBVGY3TQOJQ").unwrap();
+        assert!(hop.totp == Some(hop_totp));
+        // The target's engine is untouched.
+        assert!(engine.totp == Some(test_totp()));
     }
 
     #[test]

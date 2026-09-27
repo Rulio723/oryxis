@@ -682,13 +682,15 @@ impl SshEngine {
             .private_keys
             .get(&first_jump_id)
             .map(|pem| KeyMaterial::new(pem, first_cert));
-        self.authenticate_handle(
-            &mut current_handle,
-            first_jump,
-            first_pw.map(String::as_str),
-            first_km,
-        )
-        .await?;
+        // The hop authenticates with ITS OWN second factor (see `for_hop`).
+        self.for_hop(resolver.totp_secrets.get(&first_jump_id).map(String::as_str))
+            .authenticate_handle(
+                &mut current_handle,
+                first_jump,
+                first_pw.map(String::as_str),
+                first_km,
+            )
+            .await?;
 
         // Chain through remaining jump hosts
         for i in 1..connection.jump_chain.len() {
@@ -723,13 +725,14 @@ impl SshEngine {
                 .private_keys
                 .get(&jump_id)
                 .map(|pem| KeyMaterial::new(pem, jump_cert));
-            self.authenticate_handle(
-                &mut current_handle,
-                jump,
-                jump_pw.map(String::as_str),
-                jump_km,
-            )
-            .await?;
+            self.for_hop(resolver.totp_secrets.get(&jump_id).map(String::as_str))
+                .authenticate_handle(
+                    &mut current_handle,
+                    jump,
+                    jump_pw.map(String::as_str),
+                    jump_km,
+                )
+                .await?;
         }
 
         // Open direct-tcpip channel to final target through the last jump host
