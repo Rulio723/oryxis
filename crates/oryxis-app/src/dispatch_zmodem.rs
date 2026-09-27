@@ -130,6 +130,14 @@ impl Oryxis {
         }
 
         let dest_dir = self.default_download_dir();
+        // Whose part files these are, for a download staged in the
+        // folder every host shares: the saved host, or this pane for a
+        // host that was never saved. A part resumes only for its owner.
+        let resume_owner = self
+            .pane_by_id(pane_id)
+            .and_then(|p| p.saved_conn_id())
+            .map(|id| format!("host:{id}"))
+            .unwrap_or_else(|| format!("pane:{pane_id}"));
         // "Ask where to save downloads" (Settings > SFTP) governs every
         // download the app performs, and an `sz` is one: the toggle sits
         // beside the default-folder row that ZMODEM reads, so a user who
@@ -159,8 +167,45 @@ impl Oryxis {
             move |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
                 let spec = match direction {
                     Direction::Download => {
-                        let (driver_dir, placement) = if ask_dest {
-                            let staging = crate::zmodem_delivery::staging_dir();
+                        let (driver_dir, placement, resume_owner) = if ask_dest {
+                            let staging = match crate::zmodem_delivery::staging_dir() {
+                                Some(dir) => dir,
+                                None => {
+                                    let _ = out
+                                        .send(Message::Zmodem(ZmodemMessage::ZmodemProgress(
+                                            pane_id,
+                                            Progress::Error(
+                                                crate::i18n::t("zmodem_no_staging").to_string(),
+                                            ),
+                                        )))
+                                        .await;
+                                    return;
+                                }
+                            };
+                            // Private, and held for the whole transfer
+                            // so the boot scan of another window never
+                            // reads it mid-dialog.
+                            let claim = match crate::zmodem_delivery::prepare_staging(&staging).await {
+                                Ok(()) => {
+                                    crate::zmodem_delivery::StagingClaim::shared(staging.clone()).await
+                                }
+                                Err(e) => Err(e),
+                            };
+                            let claim = match claim {
+                                Ok(claim) => claim,
+                                Err(e) => {
+                                    let _ = out
+                                        .send(Message::Zmodem(ZmodemMessage::ZmodemProgress(
+                                            pane_id,
+                                            Progress::Error(format!(
+                                                "{}: {e}",
+                                                staging.display()
+                                            )),
+                                        )))
+                                        .await;
+                                    return;
+                                }
+                            };
                             let start_in = dest_dir.clone();
                             let answer: crate::zmodem_delivery::DestinationAnswer =
                                 Box::pin(async move {
@@ -173,10 +218,17 @@ impl Oryxis {
                                 });
                             (
                                 staging.clone(),
-                                crate::zmodem_delivery::Placement::Staged { staging, answer },
+                                crate::zmodem_delivery::Placement::Staged {
+                                    staging,
+                                    answer,
+                                    claim,
+                                },
+                                Some(resume_owner),
                             )
                         } else {
-                            (dest_dir.clone(), crate::zmodem_delivery::Placement::Direct)
+                            // A folder the user chose for downloads
+                            // keeps the plain `rz -r` resume rule.
+                            (dest_dir.clone(), crate::zmodem_delivery::Placement::Direct, None)
                         };
                         // The folder the driver writes into (the staging
                         // folder, or the configured / default one) may
@@ -212,6 +264,7 @@ impl Oryxis {
                             TransferSpec::Download {
                                 dest_dir: driver_dir,
                                 budget,
+                                resume_owner,
                             },
                             placement,
                         ))
@@ -294,6 +347,9 @@ impl Oryxis {
                                     staying,
                                     err,
                                 },
+                                crate::zmodem_delivery::DeliveryEvent::Declined { trailing } => {
+                                    ZmodemMessage::ZmodemDeclined(pane_id, trailing)
+                                }
                             };
                             if out.send(Message::Zmodem(msg)).await.is_err() {
                                 break;
@@ -310,29 +366,170 @@ impl Oryxis {
         Task::stream(stream)
     }
 
-    /// Deliver what a previous process left finished in the ZMODEM
-    /// staging folder to the default download folder, once per process
-    /// (`zmodem_delivery::sweep_orphans`). Called where the download
-    /// folder setting is first known: boot for an open vault, the unlock
-    /// otherwise. Once, because a later unlock (a soft lock's) can find
-    /// a transfer mid-dialog whose parked files this must not touch.
-    /// A child window (`--inherit-vault`) leaves it to the window that
-    /// spawned it, which may be in exactly that state.
+    /// Scan the ZMODEM staging folder once per process
+    /// (`zmodem_delivery::scan_staging`): stale parts are expired, and
+    /// files a previous process received under "ask" but never saved are
+    /// OFFERED, never moved on their own. The scan stands down while any
+    /// transfer (this window's or another's) holds the folder, so it can
+    /// never touch a live dialog's files. Called at boot for an open
+    /// vault and at the unlock otherwise, which is where the offer can
+    /// be shown. A child window (`--inherit-vault`) leaves it to the
+    /// window that spawned it, so the same files are not offered twice.
     pub(crate) fn zmodem_sweep_task(&mut self) -> Option<Task<Message>> {
         if std::mem::replace(&mut self.zmodem_swept, true)
             || crate::app::AUTO_PASSWORD.get().is_some()
         {
             return None;
         }
-        let staging = crate::zmodem_delivery::staging_dir();
-        let dir = self.default_download_dir();
+        let staging = crate::zmodem_delivery::staging_dir()?;
         Some(Task::perform(
             async move {
-                let files = crate::zmodem_delivery::sweep_orphans(&staging, &dir).await;
-                (dir, files)
+                let scan = crate::zmodem_delivery::scan_staging(
+                    &staging,
+                    crate::zmodem_delivery::PART_MAX_AGE,
+                )
+                .await;
+                (staging, scan)
             },
-            |(dir, files)| Message::Zmodem(ZmodemMessage::ZmodemRecovered { dir, files }),
+            |(staging, scan)| {
+                let orphans = match scan {
+                    crate::zmodem_delivery::StagingScan::Busy => Vec::new(),
+                    crate::zmodem_delivery::StagingScan::Scanned { orphans, expired } => {
+                        if expired > 0 {
+                            tracing::info!(
+                                "expired {expired} stale ZMODEM part file(s) in {}",
+                                staging.display()
+                            );
+                        }
+                        orphans
+                    }
+                };
+                Message::Zmodem(ZmodemMessage::ZmodemStagingScanned { staging, orphans })
+            },
         ))
+    }
+
+    /// A transfer event for `pane_id`. `declined` marks a session that
+    /// completed on the wire after the user declined the folder dialog:
+    /// the divert ends exactly as on a completion, but the outcome is
+    /// the cancel it was, since the files are gone.
+    fn handle_zmodem_progress(
+        &mut self,
+        pane_id: Uuid,
+        progress: Progress,
+        declined: bool,
+    ) -> Task<Message> {
+        // Terminal events tear the divert down and replay any
+        // output the transfer no longer owns: the driver's
+        // `trailing` (bytes past the peer's "OO" sign-off),
+        // then whatever landed on the dead wire channel while
+        // this message was in flight (`late`), in arrival
+        // order. Replaying synchronously through the normal
+        // `PtyOutput` path keeps rendering, logging and
+        // detection identical to live output, and nothing else
+        // can interleave (the divert is cleared right here).
+        let mut toast: Option<String> = None;
+        let mut replay: Vec<u8> = Vec::new();
+        let mut divert_closed = false;
+        // What the OS notice names, taken while the overlay is
+        // still here: the terminal arms below consume it, and
+        // the transfer's own file name is the only thing that
+        // tells two of them apart in a notification list.
+        let mut finished: Option<(String, String)> = None;
+        {
+            let Some(pane) = self.pane_by_id_mut(pane_id) else {
+                return Task::none();
+            };
+            let file_name = pane
+                .zmodem
+                .as_ref()
+                .and_then(|zm| zm.file_name.clone())
+                .unwrap_or_default();
+            match progress {
+                Progress::Started { name, size, batch, .. } => {
+                    if let Some(zm) = pane.zmodem.as_mut() {
+                        zm.file_name = Some(name);
+                        zm.total = size;
+                        zm.transferred = 0;
+                        zm.batch = batch;
+                    }
+                }
+                Progress::Advanced { transferred, total } => {
+                    if let Some(zm) = pane.zmodem.as_mut() {
+                        zm.transferred = transferred;
+                        zm.total = total;
+                    }
+                }
+                Progress::FileDone { .. } => {}
+                Progress::Completed { trailing } => {
+                    replay = trailing;
+                    if let Some(zm) = pane.zmodem.take() {
+                        replay.extend(zm.late);
+                    }
+                    let title = if declined {
+                    crate::i18n::t("transfer_notify_cancelled")
+                } else {
+                    crate::i18n::t("transfer_notify_done")
+                };
+                    toast = Some(title.to_string());
+                    finished = Some((title.to_string(), file_name));
+                    divert_closed = true;
+                }
+                Progress::Aborted => {
+                    if let Some(zm) = pane.zmodem.take() {
+                        replay = zm.late;
+                    }
+                    let title = crate::i18n::t("transfer_notify_cancelled");
+                    toast = Some(title.to_string());
+                    finished = Some((title.to_string(), file_name));
+                    divert_closed = true;
+                }
+                Progress::Error(e) => {
+                    if let Some(zm) = pane.zmodem.take() {
+                        replay = zm.late;
+                    }
+                    toast = Some(format!("{}: {e}", crate::i18n::t("transfer_notify_failed")));
+                    finished =
+                        Some((crate::i18n::t("transfer_notify_failed").to_string(), e.to_string()));
+                    divert_closed = true;
+                }
+            }
+        }
+        if divert_closed {
+            // Close the Telnet inbound raw window with the divert.
+            // The replayed trailing bytes skip the charset decode
+            // (they were captured raw); a non-ASCII prompt tail may
+            // render mojibake once, which beats corrupting the
+            // whole transfer.
+            self.set_zmodem_binary_inbound(pane_id, false);
+        }
+        // A ZMODEM transfer runs in the terminal the user
+        // started it from, so away from the window it gets the
+        // same OS notice an SFTP queue does; the toast is the
+        // in-app half, and stays whenever that notice wasn't
+        // shown. Both directions land here: `rz` and `sz` are
+        // one driver, and every one of its ends is one of the
+        // three arms above.
+        //
+        // A cancel notifies too, which is not the redundancy it
+        // looks like: cancelling from the card means being in
+        // front of the window, where the notice is suppressed
+        // anyway. What is left is a cancel from the OTHER end,
+        // and from a room away that is a transfer that stopped
+        // without finishing, same as a failure.
+        let notified = finished
+            .as_ref()
+            .is_some_and(|(title, body)| self.notify_away(title, body, toast.clone()));
+        if let Some(text) = toast
+            && !notified
+        {
+            self.set_toast(text);
+        }
+        if replay.is_empty() {
+            Task::none()
+        } else {
+            self.update(Message::Terminal(TerminalMessage::PtyOutput(pane_id, replay)))
+        }
     }
 
     /// Handle a streamed transfer event: update the overlay state and,
@@ -341,113 +538,10 @@ impl Oryxis {
     pub(crate) fn handle_zmodem(&mut self, message: ZmodemMessage) -> Task<Message> {
         match message {
             ZmodemMessage::ZmodemProgress(pane_id, progress) => {
-                // Terminal events tear the divert down and replay any
-                // output the transfer no longer owns: the driver's
-                // `trailing` (bytes past the peer's "OO" sign-off),
-                // then whatever landed on the dead wire channel while
-                // this message was in flight (`late`), in arrival
-                // order. Replaying synchronously through the normal
-                // `PtyOutput` path keeps rendering, logging and
-                // detection identical to live output, and nothing else
-                // can interleave (the divert is cleared right here).
-                let mut toast: Option<String> = None;
-                let mut replay: Vec<u8> = Vec::new();
-                let mut divert_closed = false;
-                // What the OS notice names, taken while the overlay is
-                // still here: the terminal arms below consume it, and
-                // the transfer's own file name is the only thing that
-                // tells two of them apart in a notification list.
-                let mut finished: Option<(String, String)> = None;
-                {
-                    let Some(pane) = self.pane_by_id_mut(pane_id) else {
-                        return Task::none();
-                    };
-                    let file_name = pane
-                        .zmodem
-                        .as_ref()
-                        .and_then(|zm| zm.file_name.clone())
-                        .unwrap_or_default();
-                    match progress {
-                        Progress::Started { name, size, batch } => {
-                            if let Some(zm) = pane.zmodem.as_mut() {
-                                zm.file_name = Some(name);
-                                zm.total = size;
-                                zm.transferred = 0;
-                                zm.batch = batch;
-                            }
-                        }
-                        Progress::Advanced { transferred, total } => {
-                            if let Some(zm) = pane.zmodem.as_mut() {
-                                zm.transferred = transferred;
-                                zm.total = total;
-                            }
-                        }
-                        Progress::FileDone { .. } => {}
-                        Progress::Completed { trailing } => {
-                            replay = trailing;
-                            if let Some(zm) = pane.zmodem.take() {
-                                replay.extend(zm.late);
-                            }
-                            let title = crate::i18n::t("transfer_notify_done");
-                            toast = Some(title.to_string());
-                            finished = Some((title.to_string(), file_name));
-                            divert_closed = true;
-                        }
-                        Progress::Aborted => {
-                            if let Some(zm) = pane.zmodem.take() {
-                                replay = zm.late;
-                            }
-                            let title = crate::i18n::t("transfer_notify_cancelled");
-                            toast = Some(title.to_string());
-                            finished = Some((title.to_string(), file_name));
-                            divert_closed = true;
-                        }
-                        Progress::Error(e) => {
-                            if let Some(zm) = pane.zmodem.take() {
-                                replay = zm.late;
-                            }
-                            toast = Some(format!("{}: {e}", crate::i18n::t("transfer_notify_failed")));
-                            finished =
-                                Some((crate::i18n::t("transfer_notify_failed").to_string(), e.to_string()));
-                            divert_closed = true;
-                        }
-                    }
-                }
-                if divert_closed {
-                    // Close the Telnet inbound raw window with the divert.
-                    // The replayed trailing bytes skip the charset decode
-                    // (they were captured raw); a non-ASCII prompt tail may
-                    // render mojibake once, which beats corrupting the
-                    // whole transfer.
-                    self.set_zmodem_binary_inbound(pane_id, false);
-                }
-                // A ZMODEM transfer runs in the terminal the user
-                // started it from, so away from the window it gets the
-                // same OS notice an SFTP queue does; the toast is the
-                // in-app half, and stays whenever that notice wasn't
-                // shown. Both directions land here: `rz` and `sz` are
-                // one driver, and every one of its ends is one of the
-                // three arms above.
-                //
-                // A cancel notifies too, which is not the redundancy it
-                // looks like: cancelling from the card means being in
-                // front of the window, where the notice is suppressed
-                // anyway. What is left is a cancel from the OTHER end,
-                // and from a room away that is a transfer that stopped
-                // without finishing, same as a failure.
-                let notified = finished
-                    .as_ref()
-                    .is_some_and(|(title, body)| self.notify_away(title, body, toast.clone()));
-                if let Some(text) = toast
-                    && !notified
-                {
-                    self.set_toast(text);
-                }
-                if replay.is_empty() {
-                    Task::none()
-                } else {
-                    self.update(Message::Terminal(TerminalMessage::PtyOutput(pane_id, replay)))
-                }
+                self.handle_zmodem_progress(pane_id, progress, false)
+            }
+            ZmodemMessage::ZmodemDeclined(pane_id, trailing) => {
+                self.handle_zmodem_progress(pane_id, Progress::Completed { trailing }, true)
             }
             ZmodemMessage::PickZmodemDownloadDir => Task::perform(
                 tokio::task::spawn_blocking(|| {
@@ -492,16 +586,103 @@ impl Oryxis {
                     .replacen("{staying}", &staying.display().to_string(), 1);
                 self.show_toast_secs(text, 8)
             }
-            ZmodemMessage::ZmodemRecovered { dir, files } => {
-                if files.is_empty() {
+            ZmodemMessage::ZmodemStagingScanned { staging, orphans } => {
+                if orphans.is_empty() {
                     return Task::none();
                 }
-                for f in &files {
-                    tracing::info!("delivered {} from the ZMODEM staging folder", f.display());
+                // Received under "ask" and never answered: the choice is
+                // still the user's, so it is offered again rather than
+                // made for them (`zmodem_delivery` module docs). Close
+                // leaves the files where they are, and the offer comes
+                // back at the next launch.
+                let body = match orphans.as_slice() {
+                    [one] => crate::i18n::t("zmodem_orphans_body_one").replacen(
+                        "{name}",
+                        &one.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        1,
+                    ),
+                    many => crate::i18n::t("zmodem_orphans_body_many")
+                        .replacen("{n}", &many.len().to_string(), 1),
                 }
-                let text = crate::i18n::t("zmodem_recovered")
-                    .replacen("{dir}", &dir.display().to_string(), 1);
-                self.show_toast_secs(text, 6)
+                .replacen("{dir}", &staging.display().to_string(), 1);
+                self.error_dialog = Some(crate::state::ErrorDialog {
+                    title: crate::i18n::t("zmodem_orphans_title").to_string(),
+                    body,
+                    link: None,
+                    action: Some(crate::state::ErrorDialogAction {
+                        label: crate::i18n::t("zmodem_orphans_save").to_string(),
+                        message: Box::new(Message::Zmodem(ZmodemMessage::ZmodemOrphansPick(
+                            orphans,
+                        ))),
+                        danger: false,
+                    }),
+                });
+                Task::none()
+            }
+            ZmodemMessage::ZmodemOrphansPick(files) => {
+                let start_in = self.default_download_dir();
+                Task::perform(
+                    async move {
+                        let dir = rfd::AsyncFileDialog::new()
+                            .set_title(crate::i18n::t("sftp_download_to"))
+                            .set_directory(&start_in)
+                            .pick_folder()
+                            .await
+                            .map(|handle| handle.path().to_path_buf());
+                        (files, dir)
+                    },
+                    |(files, dir)| Message::Zmodem(ZmodemMessage::ZmodemOrphansPicked(files, dir)),
+                )
+            }
+            ZmodemMessage::ZmodemOrphansPicked(files, dir) => {
+                // Cancelled: the files stay staged and are offered again
+                // at the next launch.
+                let Some(dir) = dir else {
+                    return Task::none();
+                };
+                Task::perform(
+                    async move {
+                        crate::zmodem_delivery::deliver_orphans(&files, &dir)
+                            .await
+                            .map(|(moved, failed)| (dir, moved, failed))
+                    },
+                    |placed| match placed {
+                        Some((dir, moved, failed)) => {
+                            Message::Zmodem(ZmodemMessage::ZmodemOrphansPlaced { dir, moved, failed })
+                        }
+                        // A transfer is receiving into the same folder:
+                        // nothing moved, and the files are offered again
+                        // at the next launch.
+                        None => Message::ToastShow(
+                            crate::i18n::t("zmodem_orphans_busy").to_string(),
+                        ),
+                    },
+                )
+            }
+            ZmodemMessage::ZmodemOrphansPlaced { dir, moved, failed } => {
+                for (staying, err) in &failed {
+                    tracing::warn!("saving {} to {} failed: {err}", staying.display(), dir.display());
+                }
+                // A failure outranks the success line: the file that did
+                // not move is the one the user has to go and find.
+                if let Some((staying, err)) = failed.first() {
+                    let name = staying
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let text = crate::i18n::t("zmodem_move_failed")
+                        .replacen("{name}", &name, 1)
+                        .replacen("{dir}", &dir.display().to_string(), 1)
+                        .replacen("{err}", err, 1)
+                        .replacen("{staying}", &staying.display().to_string(), 1);
+                    return self.show_toast_secs(text, 8);
+                }
+                if moved.is_empty() {
+                    return Task::none();
+                }
+                self.update(Message::Zmodem(ZmodemMessage::ZmodemDelivered { dir, files: moved }))
             }
             ZmodemMessage::ZmodemCancel(pane_id) => {
                 if let Some(pane) = self.pane_by_id_mut(pane_id)

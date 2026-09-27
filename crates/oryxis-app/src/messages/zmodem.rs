@@ -35,7 +35,25 @@ pub enum ZmodemMessage {
         staying: std::path::PathBuf,
         err: String,
     },
-    /// The boot sweep delivered files a previous process left finished
-    /// in the staging folder to the default download folder.
-    ZmodemRecovered { dir: std::path::PathBuf, files: Vec<std::path::PathBuf> },
+    /// The session completed on the wire after the user had declined
+    /// the folder dialog: tears the divert down like a completion
+    /// (`trailing` goes back to the terminal) but reports a cancel,
+    /// because the files are gone.
+    ZmodemDeclined(Uuid, Vec<u8>),  // (pane_id, trailing)
+    /// The boot scan of the staging folder (`zmodem_delivery`): files a
+    /// previous process received under "ask" and nobody saved, which
+    /// are offered, never delivered on their own.
+    ZmodemStagingScanned { staging: std::path::PathBuf, orphans: Vec<std::path::PathBuf> },
+    /// The user asked to save the scan's files: open the folder picker.
+    ZmodemOrphansPick(Vec<std::path::PathBuf>),
+    /// The folder picker for those files answered (`None` = cancelled,
+    /// the files stay in staging).
+    ZmodemOrphansPicked(Vec<std::path::PathBuf>, Option<std::path::PathBuf>),
+    /// The scan's files were moved into `dir`: the names that landed,
+    /// and per failure where the file stayed and why.
+    ZmodemOrphansPlaced {
+        dir: std::path::PathBuf,
+        moved: Vec<String>,
+        failed: Vec<(std::path::PathBuf, String)>,
+    },
 }

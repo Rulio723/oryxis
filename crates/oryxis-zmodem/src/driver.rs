@@ -107,6 +107,223 @@ const MAX_UNANNOUNCED_DOWNLOAD: u64 = u32::MAX as u64;
 /// anchor the next transfer of the same file resumes from.
 pub const PART_SUFFIX: &str = ".oryxis-part";
 
+/// Where the resume owner of `<name>.oryxis-part` is recorded, when the
+/// caller asked for one (`resume_owner` on [`TransferSpec::Download`]):
+/// `.<name>.oryxis-part`. The leading dot is what keeps it apart from
+/// every download: [`sanitize_name`] strips leading dots, so no remote
+/// name can ever land on it, and the shared suffix makes every sweep
+/// that leaves part files alone leave this one alone too.
+pub fn resume_owner_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    dir.join(format!(".{name}{PART_SUFFIX}"))
+}
+
+/// The recorded owner of a part file, as the text the sidecar holds:
+/// the owner and the size the sender announced, one per line. A part
+/// resumes only when BOTH match, so a stale part of the same name from
+/// another source (another host, or the same host's different file) is
+/// restarted instead of being continued into a mix of two files.
+fn resume_owner_record(owner: &str, advertised: u64) -> String {
+    format!("{owner}\n{advertised}\n")
+}
+
+/// Whether the sidecar beside a part says it belongs to `owner` and to a
+/// file of `advertised` bytes. A sidecar that is missing, unreadable or
+/// not a regular file (a symlink planted in the folder is never read
+/// through) answers no.
+async fn resume_owner_matches(sidecar: &std::path::Path, owner: &str, advertised: u64) -> bool {
+    match tokio::fs::symlink_metadata(sidecar).await {
+        Ok(m) if m.file_type().is_file() => {}
+        _ => return false,
+    }
+    tokio::fs::read_to_string(sidecar)
+        .await
+        .is_ok_and(|text| text == resume_owner_record(owner, advertised))
+}
+
+/// The owner record belonging to a part file, whatever its (possibly
+/// numbered) name: `<dir>/.<stem>.oryxis-part` for `<dir>/<stem>.oryxis-part`.
+/// `None` for a path that is not a part.
+pub fn resume_owner_path_for_part(part: &std::path::Path) -> Option<PathBuf> {
+    let file = part.file_name()?.to_str()?;
+    let stem = file.strip_suffix(PART_SUFFIX)?;
+    Some(resume_owner_path(part.parent()?, stem))
+}
+
+/// A part file this transfer has claimed: open, positioned where the
+/// next byte goes, and holding an EXCLUSIVE OS lock for as long as the
+/// handle lives.
+struct ClaimedPart {
+    file: tokio::fs::File,
+    path: PathBuf,
+    resume_at: u64,
+}
+
+/// How [`claim_part`] found one candidate part name.
+enum PartSlot {
+    /// Ours: opened and locked, with its length when it already existed.
+    Locked(std::fs::File, Option<u64>),
+    /// Another live transfer holds it: never touched, try the next name.
+    Held,
+    /// Created by someone else between our look and our create: look again.
+    Raced,
+}
+
+/// Open (or create) and lock the part for `name` in `dir`.
+///
+/// A part is never shared: two transfers of the same name at once (two
+/// panes running `sz syslog`, or two hosts into the one staging folder)
+/// used to truncate or append into each other's file, and both came out
+/// corrupt without an error. The part is locked EXCLUSIVELY for the life
+/// of its write handle, so a part somebody is writing is skipped and
+/// this transfer takes the next numbered name (`name (N)`), which is
+/// only the part's name: the file still lands as `name` (or its own
+/// collision suffix) when it is placed.
+///
+/// An unlocked part is dead, and resumes (`rz -r`, length based) only
+/// when it is no longer than the advertised size and, when the caller
+/// named an owner, its owner record says it is the same file from the
+/// same source; otherwise it restarts from zero under our lock.
+async fn claim_part(
+    dir: &std::path::Path,
+    name: &str,
+    advertised: u64,
+    owner: Option<&str>,
+) -> Result<ClaimedPart, String> {
+    for n in 0..10_000u32 {
+        let stem = if n == 0 {
+            name.to_string()
+        } else {
+            numbered_name(name, n)
+        };
+        let path = dir.join(format!("{stem}{PART_SUFFIX}"));
+        let (file, existing) = match open_and_lock_part(&path).await? {
+            PartSlot::Locked(file, existing) => (file, existing),
+            PartSlot::Held => continue,
+            PartSlot::Raced => match open_and_lock_part(&path).await? {
+                PartSlot::Locked(file, existing) => (file, existing),
+                PartSlot::Held | PartSlot::Raced => continue,
+            },
+        };
+        let sidecar = resume_owner_path(dir, &stem);
+        let owned = match owner {
+            None => true,
+            Some(owner) => resume_owner_matches(&sidecar, owner, advertised).await,
+        };
+        let resume_at = match existing {
+            Some(len) if owned && advertised > 0 && len > 0 && len <= advertised => len,
+            _ => 0,
+        };
+        let file = tokio::task::spawn_blocking(move || -> std::io::Result<std::fs::File> {
+            use std::io::{Seek, SeekFrom};
+            let mut file = file;
+            if resume_at == 0 {
+                // A dead part that does not qualify restarts, under
+                // our lock, so nobody else can be reading it.
+                file.set_len(0)?;
+            }
+            file.seek(SeekFrom::Start(resume_at))?;
+            Ok(file)
+        })
+        .await
+        .map_err(|e| format!("open {}: {e}", path.display()))?
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+        // A fresh part in a shared folder says whose it is, so the next
+        // transfer of the same name from somewhere else restarts instead
+        // of appending to it.
+        if resume_at == 0
+            && let Some(owner) = owner
+        {
+            write_resume_owner(&sidecar, owner, advertised).await?;
+        }
+        return Ok(ClaimedPart {
+            file: tokio::fs::File::from_std(file),
+            path,
+            resume_at,
+        });
+    }
+    Err(format!(
+        "claim {}: too many parts of this name in use",
+        dir.join(name).display()
+    ))
+}
+
+/// One attempt at the part `path`. `symlink_metadata` does NOT follow a
+/// link, so a hostile pre-planted `<name>.oryxis-part` symlink (pointing
+/// at ~/.bashrc, say) is seen for what it is and removed, never opened
+/// THROUGH; only a regular file we find, or one we create with
+/// `create_new` (O_EXCL), is ever written.
+async fn open_and_lock_part(path: &std::path::Path) -> Result<PartSlot, String> {
+    let existing = match tokio::fs::symlink_metadata(path).await {
+        Ok(m) if m.file_type().is_file() => Some(m.len()),
+        Ok(_) => {
+            let _ = tokio::fs::remove_file(path).await;
+            None
+        }
+        Err(_) => None,
+    };
+    let owned_path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<PartSlot, String> {
+        let path = owned_path;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true);
+        if existing.is_none() {
+            options.create_new(true);
+        }
+        let file = match options.open(&path) {
+            Ok(file) => file,
+            Err(e) if existing.is_none() && e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Ok(PartSlot::Raced);
+            }
+            // Gone between the look and the open: look again.
+            Err(e) if existing.is_some() && e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PartSlot::Raced);
+            }
+            Err(e) => return Err(format!("open {}: {e}", path.display())),
+        };
+        match file.try_lock() {
+            Ok(()) => {
+                // The length is read under the lock: whatever wrote the
+                // part before is finished with it.
+                let len = file
+                    .metadata()
+                    .map_err(|e| format!("stat {}: {e}", path.display()))?
+                    .len();
+                Ok(PartSlot::Locked(file, existing.map(|_| len)))
+            }
+            Err(std::fs::TryLockError::WouldBlock) => Ok(PartSlot::Held),
+            Err(std::fs::TryLockError::Error(e)) => {
+                Err(format!("lock {}: {e}", path.display()))
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("open {}: {e}", path.display()))?
+}
+
+/// Record `owner` beside a freshly started part. Whatever sits at the
+/// sidecar path is removed first (`remove_file` does not follow a
+/// link) and the record is written with `create_new`, so a planted
+/// symlink can never redirect the write.
+async fn write_resume_owner(
+    sidecar: &std::path::Path,
+    owner: &str,
+    advertised: u64,
+) -> Result<(), String> {
+    let _ = tokio::fs::remove_file(sidecar).await;
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(sidecar)
+        .await
+        .map_err(|e| format!("create {}: {e}", sidecar.display()))?;
+    file.write_all(resume_owner_record(owner, advertised).as_bytes())
+        .await
+        .map_err(|e| format!("write {}: {e}", sidecar.display()))?;
+    file.flush()
+        .await
+        .map_err(|e| format!("flush {}: {e}", sidecar.display()))
+}
+
 /// The `CAN` byte (0x18, also ZDLE). A run of these on the wire is the
 /// lrzsz cancel a remote `sz`/`rz` sends when the user Ctrl-C's it.
 const CAN: u8 = 0x18;
@@ -156,9 +373,18 @@ pub enum TransferSpec {
     /// headroom, or a configured cap) because the policy belongs with
     /// the app; `None` means unbounded, which is what the upload side
     /// and the tests use.
+    ///
+    /// `resume_owner` ties a part file to where it came from. `None`
+    /// keeps the plain `rz -r` rule (a part no larger than the announced
+    /// size resumes), which is right for a folder the user picked for
+    /// this host. `Some` is for a folder SHARED by every source (the
+    /// app's staging folder): a part then resumes only when its sidecar
+    /// ([`resume_owner_path`]) names the same owner and the same
+    /// announced size, and a fresh part records it.
     Download {
         dest_dir: PathBuf,
         budget: Option<u64>,
+        resume_owner: Option<String>,
     },
     /// Upload: send these local files, in order, in one session.
     /// `streaming_window` is the sender's in-flight subpacket window,
@@ -181,6 +407,11 @@ pub enum Progress {
         name: String,
         size: Option<u64>,
         batch: Option<(usize, usize)>,
+        /// Where a DOWNLOAD is writing this file's bytes (the part file
+        /// the driver claimed, which is not always `<name>.oryxis-part`:
+        /// a part another live transfer holds is never shared, so this
+        /// one may be numbered). `None` for uploads.
+        part: Option<PathBuf>,
     },
     /// Cumulative bytes moved for the current file.
     Advanced { transferred: u64, total: Option<u64> },
@@ -286,7 +517,12 @@ async fn run_download(
     first_wire: Vec<u8>,
     io: &mut TransferIo,
 ) -> Result<Outcome, String> {
-    let TransferSpec::Download { dest_dir, budget } = spec else {
+    let TransferSpec::Download {
+        dest_dir,
+        budget,
+        resume_owner,
+    } = spec
+    else {
         return Err("download driver given a non-download spec".into());
     };
     // Advertise nonstop I/O (zero buffer length) plus CANOVIO: the pane
@@ -413,67 +649,14 @@ async fn run_download(
                         b.saturating_sub(session_written)
                     ));
                 }
-                let part = dest_dir.join(format!("{safe}{PART_SUFFIX}"));
-                // Resume decision, `rz -r` semantics (length based): an
-                // existing part no larger than the advertised total
-                // continues where it left off; len == total still goes
-                // through the resume path so a crash between the last
-                // byte and the rename heals (sz answers ZRPOS(total)
-                // with an immediate ZEOF and the rename runs below).
                 let advertised = size.unwrap_or(0);
-                // `symlink_metadata` does NOT follow a link, so a hostile
-                // pre-planted `<name>.oryxis-part` symlink (pointing at
-                // ~/.bashrc, say) is seen as a symlink and never resumed
-                // THROUGH: only a real file we wrote reaches the append
-                // path below. Anything else at that path (symlink, dir) is
-                // stale or hostile, so drop it and restart fresh under the
-                // create_new (O_EXCL) path.
-                let existing = match tokio::fs::symlink_metadata(&part).await {
-                    Ok(m) if m.file_type().is_file() => Some(m.len()),
-                    Ok(_) => {
-                        let _ = tokio::fs::remove_file(&part).await;
-                        None
-                    }
-                    Err(_) => None,
-                };
-                let resume_at = match existing {
-                    Some(len) if advertised > 0 && len > 0 && len <= advertised => len,
-                    _ => 0,
-                };
+                let claimed =
+                    claim_part(&dest_dir, &safe, advertised, resume_owner.as_deref()).await?;
+                let resume_at = claimed.resume_at;
                 let resume_at32 = u32::try_from(resume_at)
                     .map_err(|_| "partial larger than 4 GiB (ZMODEM limit)".to_string())?;
-                let file = if resume_at > 0 {
-                    // Resuming an in-flight part of the same name is
-                    // indistinguishable from resuming a dead one
-                    // without OS file locks (the `rz -r` trade-off);
-                    // fresh parts below stay create_new-protected.
-                    tokio::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&part)
-                        .await
-                        .map_err(|e| format!("open {}: {e}", part.display()))?
-                } else {
-                    match tokio::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&part)
-                        .await
-                    {
-                        Ok(file) => file,
-                        // A stale part (larger than the advertised
-                        // size, or a zero-byte leftover) restarts.
-                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                            tokio::fs::OpenOptions::new()
-                                .write(true)
-                                .truncate(true)
-                                .open(&part)
-                                .await
-                                .map_err(|e| format!("open {}: {e}", part.display()))?
-                        }
-                        Err(e) => return Err(format!("create {}: {e}", part.display())),
-                    }
-                };
-                dest = Some(BufWriter::with_capacity(FILE_BUF_SIZE, file));
+                let part = claimed.path.clone();
+                dest = Some(BufWriter::with_capacity(FILE_BUF_SIZE, claimed.file));
                 name = safe;
                 dest_path = Some(part);
                 total = size;
@@ -499,6 +682,7 @@ async fn run_download(
                     name: name.clone(),
                     size,
                     batch: None,
+                    part: dest_path.clone(),
                 });
                 if resume_at > 0 {
                     // Let the overlay start at the resumed percentage
@@ -509,13 +693,24 @@ async fn run_download(
             Step::FileDone => {
                 if let Some(mut file) = dest.take() {
                     file.flush().await.map_err(|e| format!("flush: {e}"))?;
+                    // Closed (and its lock released) before the part is
+                    // renamed: `into_std` waits out any write still in
+                    // flight, so nothing holds the file past this line.
+                    drop(file.into_inner().into_std().await);
                 }
                 // The finished part surfaces under its real name only
                 // now; a collision gets the browser-style " (N)".
-                let final_path = match dest_path.take() {
-                    Some(part) => Some(place_file(&part, &dest_dir, &name).await?),
+                let part = dest_path.take();
+                let final_path = match &part {
+                    Some(part) => Some(place_file(part, &dest_dir, &name).await?),
                     None => None,
                 };
+                // The part is gone, so is the record of whose it was.
+                if resume_owner.is_some()
+                    && let Some(sidecar) = part.as_deref().and_then(resume_owner_path_for_part)
+                {
+                    let _ = tokio::fs::remove_file(sidecar).await;
+                }
                 if let Some(path) = final_path.as_ref()
                     && let Some(on_disk) = path.file_name()
                 {
@@ -752,6 +947,7 @@ async fn run_upload(
         name: current.name.clone(),
         size: Some(current.size),
         batch: batch_of(index),
+        part: None,
     });
 
     let mut pending = first_wire;
@@ -873,6 +1069,7 @@ async fn run_upload(
                         name: current.name.clone(),
                         size: Some(current.size),
                         batch: batch_of(index),
+                        part: None,
                     });
                 }
             }
@@ -1036,6 +1233,12 @@ async fn move_over_marker(
                     .await
                     .map_err(|e| format!("copy {}: {e}", tmp.display()))?;
                 to.flush().await.map_err(|e| format!("flush {}: {e}", tmp.display()))?;
+                // On disk before the rename makes it the file: a crash
+                // right after must not leave a complete name over bytes
+                // the page cache still held.
+                to.sync_all()
+                    .await
+                    .map_err(|e| format!("sync {}: {e}", tmp.display()))?;
                 Ok::<(), String>(())
             }
             .await;
@@ -1048,10 +1251,18 @@ async fn move_over_marker(
                 .map_err(|e| format!("rename {}: {e}", path.display()))?;
             // The copy is in place under the final name; only now may
             // the original go. A failure here leaves a duplicate, which
-            // is the safe side of this error.
-            tokio::fs::remove_file(src)
-                .await
-                .map_err(|e| format!("remove {}: {e}", src.display()))
+            // is the safe side of this error, so it is NOT an error:
+            // reporting one would make the caller drop the reservation,
+            // which by now IS the complete copy (and possibly the only
+            // one, if something else already took the source).
+            if let Err(e) = tokio::fs::remove_file(src).await {
+                tracing::warn!(
+                    "{} was copied to {} but could not be removed: {e}",
+                    src.display(),
+                    path.display()
+                );
+            }
+            Ok(())
         }
         Err(e) => Err(format!("rename {}: {e}", path.display())),
     }
@@ -1331,6 +1542,7 @@ mod tests {
                 TransferSpec::Download {
                     budget: None,
                     dest_dir: dir.clone(),
+                    resume_owner: None,
                 },
                 Vec::new(),
                 TransferIo {
@@ -1402,7 +1614,7 @@ mod tests {
 
             let task = tokio::spawn(run(
                 Direction::Download,
-                TransferSpec::Download { budget: None, dest_dir: dir.clone() },
+                TransferSpec::Download { budget: None, dest_dir: dir.clone(), resume_owner: None },
                 Vec::new(),
                 TransferIo {
                     wire_in,
@@ -1600,7 +1812,7 @@ mod tests {
 
             run(
                 Direction::Download,
-                TransferSpec::Download { budget: None, dest_dir: dir.clone() },
+                TransferSpec::Download { budget: None, dest_dir: dir.clone(), resume_owner: None },
                 Vec::new(),
                 TransferIo {
                     wire_in,
@@ -1687,6 +1899,7 @@ mod tests {
                     // Room for the first file and a sliver, never the second.
                     budget: Some(payload.len() as u64 + 16),
                     dest_dir: dest_dir.clone(),
+                    resume_owner: None,
                 },
                 Vec::new(),
                 TransferIo {
@@ -1785,6 +1998,7 @@ mod tests {
                 TransferSpec::Download {
                     budget: None,
                     dest_dir: dest_dir.clone(),
+                    resume_owner: None,
                 },
                 Vec::new(),
                 TransferIo {
@@ -1850,6 +2064,249 @@ mod tests {
             assert_eq!(got, payload, "round-tripped bytes differ");
 
             let _ = tokio::fs::remove_dir_all(&dir).await;
+        });
+    }
+
+    /// Drive one loopback upload of `src` into `dest_dir` and return
+    /// the path the download reported for it.
+    async fn loopback_download(src: &std::path::Path, dest_dir: &std::path::Path, owner: Option<&str>) -> PathBuf {
+        let (up2down_tx, up2down_rx) = mpsc::unbounded_channel();
+        let (down2up_tx, down2up_rx) = mpsc::unbounded_channel();
+        let (p_up_tx, _p_up_rx) = mpsc::unbounded_channel();
+        let (p_down_tx, mut p_down_rx) = mpsc::unbounded_channel();
+        let abort = Arc::new(AtomicBool::new(false));
+        let up = tokio::spawn(run(
+            Direction::Upload,
+            TransferSpec::Upload {
+                sources: vec![src.to_path_buf()],
+                streaming_window: DEFAULT_STREAMING_WINDOW,
+            },
+            Vec::new(),
+            TransferIo {
+                wire_in: down2up_rx,
+                wire_out: up2down_tx,
+                progress: p_up_tx,
+                abort: abort.clone(),
+            },
+        ));
+        let down = tokio::spawn(run(
+            Direction::Download,
+            TransferSpec::Download {
+                budget: None,
+                dest_dir: dest_dir.to_path_buf(),
+                resume_owner: owner.map(str::to_string),
+            },
+            Vec::new(),
+            TransferIo {
+                wire_in: up2down_rx,
+                wire_out: down2up_tx,
+                progress: p_down_tx,
+                abort,
+            },
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            up.await.unwrap();
+            down.await.unwrap();
+        })
+        .await
+        .expect("transfer deadlocked");
+        let mut saved = None;
+        while let Ok(p) = p_down_rx.try_recv() {
+            match p {
+                Progress::FileDone { path, .. } => saved = path,
+                Progress::Error(e) => panic!("download error: {e}"),
+                _ => {}
+            }
+        }
+        saved.expect("no saved path reported")
+    }
+
+    /// In a folder every source shares, a leftover part resumes only for
+    /// the owner its sidecar names: another owner's part (or one with no
+    /// record at all) restarts, and never ends up as the head of a file
+    /// the current sender's tail was appended to.
+    #[test]
+    fn a_shared_folder_part_resumes_only_for_its_owner() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = std::env::temp_dir().join(format!("oryxis-zm-owner-{}", std::process::id()));
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            let dest = dir.join("staging");
+            tokio::fs::create_dir_all(&dest).await.unwrap();
+            let src = dir.join("payload.bin");
+            let payload: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8).collect();
+            tokio::fs::write(&src, &payload).await.unwrap();
+            let part = dest.join(format!("payload.bin{PART_SUFFIX}"));
+            let sidecar = resume_owner_path(&dest, "payload.bin");
+            // A head that is NOT the payload's: resuming from it would
+            // show up in the result.
+            let foreign_head = vec![0xEEu8; 1000];
+
+            // Another owner's part: restarted.
+            tokio::fs::write(&part, &foreign_head).await.unwrap();
+            tokio::fs::write(&sidecar, resume_owner_record("host-a", 8192)).await.unwrap();
+            let saved = loopback_download(&src, &dest, Some("host-b")).await;
+            assert_eq!(tokio::fs::read(&saved).await.unwrap(), payload);
+            assert!(!tokio::fs::try_exists(&sidecar).await.unwrap(), "record outlived its part");
+            tokio::fs::remove_file(&saved).await.unwrap();
+
+            // A part with no record at all: restarted too.
+            tokio::fs::write(&part, &foreign_head).await.unwrap();
+            let saved = loopback_download(&src, &dest, Some("host-b")).await;
+            assert_eq!(tokio::fs::read(&saved).await.unwrap(), payload);
+            tokio::fs::remove_file(&saved).await.unwrap();
+
+            // Its own part: resumed from where it stopped (the planted
+            // head is kept, which is how the test sees the resume).
+            tokio::fs::write(&part, &foreign_head).await.unwrap();
+            tokio::fs::write(&sidecar, resume_owner_record("host-b", 8192)).await.unwrap();
+            let saved = loopback_download(&src, &dest, Some("host-b")).await;
+            let mut expected = foreign_head.clone();
+            expected.extend_from_slice(&payload[1000..]);
+            assert_eq!(tokio::fs::read(&saved).await.unwrap(), expected);
+            assert!(!tokio::fs::try_exists(&sidecar).await.unwrap());
+
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+        });
+    }
+
+    /// Two transfers of the same name at once never share a part: while
+    /// one holds `syslog.oryxis-part`, the other writes a numbered part
+    /// of its own and the first one's bytes and owner record survive
+    /// untouched. Once the first lets go, its dead part resumes for its
+    /// own owner.
+    #[test]
+    fn a_part_another_transfer_holds_is_never_touched() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = std::env::temp_dir().join(format!("oryxis-zm-held-{}", std::process::id()));
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            tokio::fs::create_dir_all(&dir).await.unwrap();
+
+            let mut first = claim_part(&dir, "syslog", 100, Some("host-a")).await.unwrap();
+            assert_eq!(first.path, dir.join(format!("syslog{PART_SUFFIX}")));
+            assert_eq!(first.resume_at, 0);
+            first.file.write_all(&[0xAA; 40]).await.unwrap();
+            first.file.flush().await.unwrap();
+
+            // Same name, same owner, while the first is live: a part of
+            // its own, never a resume into (or a truncate of) the first.
+            let second = claim_part(&dir, "syslog", 100, Some("host-a")).await.unwrap();
+            assert_eq!(second.path, dir.join(format!("syslog (1){PART_SUFFIX}")));
+            assert_eq!(second.resume_at, 0);
+            // Another source likewise.
+            let third = claim_part(&dir, "syslog", 100, Some("host-b")).await.unwrap();
+            assert_eq!(third.path, dir.join(format!("syslog (2){PART_SUFFIX}")));
+            assert_eq!(tokio::fs::read(&first.path).await.unwrap(), vec![0xAA; 40]);
+            assert!(resume_owner_matches(&resume_owner_path(&dir, "syslog"), "host-a", 100).await);
+            assert!(
+                resume_owner_matches(&resume_owner_path(&dir, "syslog (2)"), "host-b", 100).await
+            );
+            assert_eq!(
+                resume_owner_path_for_part(&third.path),
+                Some(resume_owner_path(&dir, "syslog (2)"))
+            );
+
+            // The first transfer dies: its part is dead now, and resumes
+            // for its own owner from where it stopped.
+            drop(first);
+            drop(second);
+            drop(third);
+            let again = claim_part(&dir, "syslog", 100, Some("host-a")).await.unwrap();
+            assert_eq!(again.path, dir.join(format!("syslog{PART_SUFFIX}")));
+            assert_eq!(again.resume_at, 40);
+
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+        });
+    }
+
+    /// A fresh part in a shared folder records its owner while it is in
+    /// flight, and a planted symlink at the record's path is replaced,
+    /// never written through.
+    #[cfg(unix)]
+    #[test]
+    fn the_owner_record_never_writes_through_a_symlink() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = std::env::temp_dir().join(format!("oryxis-zm-owner-link-{}", std::process::id()));
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            tokio::fs::create_dir_all(&dir).await.unwrap();
+            let victim = dir.join("victim");
+            tokio::fs::write(&victim, b"keep").await.unwrap();
+            let sidecar = resume_owner_path(&dir, "x.bin");
+            std::os::unix::fs::symlink(&victim, &sidecar).unwrap();
+            assert!(!resume_owner_matches(&sidecar, "keep", 0).await);
+            write_resume_owner(&sidecar, "host", 5).await.unwrap();
+            assert_eq!(tokio::fs::read(&victim).await.unwrap(), b"keep");
+            assert!(resume_owner_matches(&sidecar, "host", 5).await);
+            assert!(!resume_owner_matches(&sidecar, "host", 6).await);
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+        });
+    }
+
+    /// Crossing volumes, a source that cannot be removed once the copy
+    /// is in place leaves a duplicate, and the complete copy is KEPT:
+    /// the placement reports success rather than dropping its own
+    /// result. Only runs where `/dev/shm` is another volume and a
+    /// read-only folder actually refuses the removal (not as root).
+    #[cfg(unix)]
+    #[test]
+    fn a_source_that_cannot_be_removed_keeps_the_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let shm = std::path::Path::new("/dev/shm");
+            if !shm.is_dir() {
+                eprintln!("no /dev/shm here: not exercised");
+                return;
+            }
+            let src_dir = shm.join(format!("oryxis-zm-norm-{}", std::process::id()));
+            let dest = std::env::temp_dir().join(format!("oryxis-zm-norm-dest-{}", std::process::id()));
+            let _ = tokio::fs::remove_dir_all(&src_dir).await;
+            let _ = tokio::fs::remove_dir_all(&dest).await;
+            tokio::fs::create_dir_all(&src_dir).await.unwrap();
+            tokio::fs::create_dir_all(&dest).await.unwrap();
+            let src = src_dir.join("payload.bin");
+            tokio::fs::write(&src, b"complete").await.unwrap();
+            let cleanup = |src_dir: PathBuf, dest: PathBuf| async move {
+                let _ = std::fs::set_permissions(&src_dir, std::fs::Permissions::from_mode(0o755));
+                let _ = tokio::fs::remove_dir_all(&src_dir).await;
+                let _ = tokio::fs::remove_dir_all(&dest).await;
+            };
+            // Preconditions: another volume, and a removal the folder
+            // mode really refuses.
+            let probe = src_dir.join("probe");
+            tokio::fs::write(&probe, b"p").await.unwrap();
+            let crosses = matches!(
+                tokio::fs::rename(&probe, dest.join("probe")).await,
+                Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices
+            );
+            std::fs::set_permissions(&src_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let refused = tokio::fs::remove_file(&probe).await.is_err();
+            if !crosses || !refused {
+                eprintln!("preconditions not met (same volume, or running as root): not exercised");
+                cleanup(src_dir, dest).await;
+                return;
+            }
+            let landed = place_file(&src, &dest, "payload.bin").await.unwrap();
+            assert_eq!(landed, dest.join("payload.bin"));
+            assert_eq!(tokio::fs::read(&landed).await.unwrap(), b"complete");
+            assert!(tokio::fs::try_exists(&src).await.unwrap(), "the duplicate stays");
+            cleanup(src_dir, dest).await;
         });
     }
 
@@ -1921,6 +2378,7 @@ mod tests {
                 TransferSpec::Download {
                     budget: None,
                     dest_dir: dest_dir.clone(),
+                    resume_owner: None,
                 },
                 Vec::new(),
                 TransferIo {
