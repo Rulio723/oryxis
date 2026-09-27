@@ -582,6 +582,16 @@ where
             };
         }
 
+        // The running app draws a frame after every update, so the
+        // pointer always lands on what was last drawn; the emulator only
+        // draws when asked. That matters since iced pins a scrollable's
+        // content translation to the LAST DRAWN frame for hit-testing: a
+        // click right after a scroll (a settings search revealing its
+        // row, a keynav jump) would otherwise be tested against the
+        // offset from before the scroll and land on another widget.
+        if let Instruction::Interact(Interaction::Mouse(_)) = &instruction {
+            self.present_frame(program);
+        }
         self.emulator.run(program, &instruction);
         match self.pump_until_ready(program, self.timeout) {
             Pump::Ready => {
@@ -595,6 +605,16 @@ where
             Pump::Failed(instruction) => RunOutcome::Failed(instruction),
             Pump::Closed => RunOutcome::Closed,
         }
+    }
+
+    /// Draws one frame and discards it, which is what the windowed shell
+    /// does after every update. See the pointer branch of [`run_line`].
+    fn present_frame(&mut self, program: &P) {
+        let theme = self
+            .emulator
+            .theme(program)
+            .unwrap_or_else(|| <P::Theme as theme::Base>::default(theme::Mode::None));
+        let _ = self.emulator.screenshot(program, &theme, self.scale);
     }
 
     /// Delivers a synthesized OS drag-and-drop message (issue #167):
