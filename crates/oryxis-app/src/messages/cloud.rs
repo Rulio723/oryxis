@@ -109,17 +109,22 @@ pub enum CloudMessage {
         name: String,
     },
     /// The kubeconfig was written: `label` for the new account, `path`
-    /// of the file, the file's `context` (blank when it names none) and
-    /// whether every server it names is a private address. The YAML
-    /// itself never rides a message: `Message` derives `Debug`.
+    /// of the file, the file's `context` (blank when it
+    /// names none) and whether every server it names is a private
+    /// address. The YAML itself never rides a message: `Message` derives
+    /// `Debug`.
     CloudDiscoverManagedClusterStored {
         label: String,
         path: String,
         context: String,
         intranet: bool,
     },
-    /// The fetch or the write failed; the message surfaces as a toast.
-    CloudDiscoverManagedClusterFailed(String),
+    /// The fetch or the write failed for the file at `path` (which ends
+    /// the cluster's in-flight state); `error` surfaces as a toast.
+    CloudDiscoverManagedClusterFailed {
+        path: String,
+        error: String,
+    },
     CloudDiscoverDefaultTransportChanged(oryxis_core::models::cloud::TransportKind),
     CloudDiscoverDefaultGroupNameChanged(String),
     CloudDiscoverDefaultGroupPick(String),

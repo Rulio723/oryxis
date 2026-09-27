@@ -137,6 +137,7 @@ struct ClusterKubeconfig {
 /// documentation says so), which is why the UI notes where the file
 /// points instead of this crate guessing from an error.
 pub async fn kubeconfig(cfg: &TencentConfig, cluster_id: &str) -> Result<String, CloudError> {
+    check_cluster_id(cluster_id)?;
     let out = run_tccli(
         cfg,
         &[
@@ -159,9 +160,35 @@ pub async fn kubeconfig(cfg: &TencentConfig, cluster_id: &str) -> Result<String,
     Ok(body.kubeconfig)
 }
 
+/// Refuse a cluster id the CLI could read as something other than the
+/// VALUE of `--ClusterId`. The id arrives from the app, which got it from
+/// a discovery page, i.e. from a remote API: one starting with `-` would
+/// be parsed by `tccli` as a flag of its own, and an empty one would
+/// shift the next argument into the value slot.
+fn check_cluster_id(cluster_id: &str) -> Result<(), CloudError> {
+    if cluster_id.trim().is_empty()
+        || cluster_id.starts_with('-')
+        || cluster_id.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(CloudError::InvalidConfig(format!(
+            "refusing cluster id {cluster_id:?}: not a cluster id"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cluster_id_that_reads_as_a_flag_is_refused() {
+        assert!(check_cluster_id("c3fb96524f9274b4495df0f12a6b50000").is_ok());
+        assert!(check_cluster_id("cls-abc12345").is_ok());
+        for bad in ["", " ", "--profile", "-x", "a b", "a\nb"] {
+            assert!(check_cluster_id(bad).is_err(), "{bad:?} must be refused");
+        }
+    }
 
     #[test]
     fn parses_a_cluster_page() {

@@ -217,10 +217,14 @@ impl Oryxis {
                 // is a credential and `Message` derives `Debug`, so it
                 // never rides a message), and the completion carries
                 // only the path and what the view needs to know about
-                // it. The path is deterministic, so a second Add on the
-                // same cluster overwrites the file: that is the refresh
-                // an expiring ACK credential needs.
-                let path = match crate::kubeconfig_file::path_for(&family, &id) {
+                // it. The path is deterministic per (cluster, cloud
+                // account), so a second Add on the same pair overwrites
+                // the file: that is the refresh an expiring ACK
+                // credential needs.
+                let Some(profile_id) = self.cloud_discover.profile_id else {
+                    return Ok(Task::none());
+                };
+                let path = match crate::kubeconfig_file::path_for(&family, profile_id, &id) {
                     Ok(p) => p,
                     Err(e) => {
                         return Ok(self.show_toast(format!(
@@ -229,9 +233,12 @@ impl Oryxis {
                         )));
                     }
                 };
-                let Some(profile_id) = self.cloud_discover.profile_id else {
+                // One fetch per file at a time: the button is disabled
+                // while this runs, and a keyboard activation or a double
+                // click that got through anyway lands here.
+                if self.cloud_discover.managed_in_flight.contains(&path) {
                     return Ok(Task::none());
-                };
+                }
                 let Some(mut profile) = self
                     .cloud_profiles
                     .iter()
@@ -247,9 +254,12 @@ impl Oryxis {
                 if let Some(vault) = &self.vault {
                     profile.secret = vault.get_cloud_profile_secret(&profile_id).ok().flatten();
                 }
+                self.cloud_discover.managed_in_flight.insert(path.clone());
                 // Label the new K8s account after the cluster so it reads
                 // clearly in the accounts list: `ACK: prod`, `TKE: dev`.
                 let label = format!("{}: {name}", family.to_uppercase());
+                let path_str = path.to_string_lossy().into_owned();
+                let failed_path = path_str.clone();
                 return Ok(Task::perform(
                     async move {
                         let yaml = provider
@@ -261,18 +271,21 @@ impl Oryxis {
                         let intranet = crate::kubeconfig_file::servers_are_private(&yaml);
                         crate::kubeconfig_file::write_secret_file(&path, &yaml)
                             .map_err(|e| format!("writing {}: {e}", path.display()))?;
-                        Ok::<_, String>((label, path.to_string_lossy().into_owned(), context, intranet))
+                        Ok::<_, String>((label, context, intranet))
                     },
-                    |res| match res {
-                        Ok((label, path, context, intranet)) => {
+                    move |res| match res {
+                        Ok((label, context, intranet)) => {
                             Message::Cloud(CloudMessage::CloudDiscoverManagedClusterStored {
                                 label,
-                                path,
+                                path: path_str.clone(),
                                 context,
                                 intranet,
                             })
                         }
-                        Err(e) => Message::Cloud(CloudMessage::CloudDiscoverManagedClusterFailed(e)),
+                        Err(error) => Message::Cloud(CloudMessage::CloudDiscoverManagedClusterFailed {
+                            path: failed_path.clone(),
+                            error,
+                        }),
                     },
                 ));
             }
@@ -282,41 +295,68 @@ impl Oryxis {
                 context,
                 intranet,
             } => {
-                // The file is in place: create the K8s account pointed at
-                // it (auth = kubeconfig, that file, its context) unless one
-                // already does, in which case the overwrite WAS the whole
-                // operation (a refresh) and nothing is minted twice.
-                let Some(vault) = self.vault.as_ref() else {
-                    return Ok(Task::none());
-                };
-                let existing = self.cloud_profiles.iter().find(|p| {
+                self.cloud_discover
+                    .managed_in_flight
+                    .remove(std::path::Path::new(&path));
+                let points_at = |p: &oryxis_core::models::CloudProfile, file: &str| {
                     p.provider == "k8s"
                         && serde_json::from_str::<serde_json::Value>(&p.config)
                             .ok()
                             .and_then(|v| v.get("kubeconfig")?.as_str().map(str::to_string))
                             .as_deref()
-                            == Some(path.as_str())
-                });
+                            == Some(file)
+                };
+                // The file is in place: create the K8s account pointed at
+                // it (auth = kubeconfig, that file, its context) unless one
+                // already does, in which case the overwrite WAS the whole
+                // operation (a refresh) and nothing is minted twice. Only
+                // THIS cloud account's file counts: the path carries the
+                // account id, so another account that sees the same
+                // cluster (a different RAM user, a different RBAC) never
+                // has its Kubernetes account repointed at our credential.
+                let existing = self
+                    .cloud_profiles
+                    .iter()
+                    .find(|p| points_at(p, &path))
+                    .cloned();
+                let Some(vault) = self.vault.as_ref().filter(|v| !v.is_locked()) else {
+                    // The vault locked while the fetch ran. An account
+                    // already on this file still works with the fresh
+                    // credential; a file nothing points at would be a
+                    // credential no list shows, so it goes.
+                    if existing.is_some() {
+                        return Ok(self.show_toast(
+                            crate::i18n::t("cloud_managed_cluster_refreshed").to_string(),
+                        ));
+                    }
+                    let _ = std::fs::remove_file(&path);
+                    return Ok(self.show_toast(format!(
+                        "{}: {}",
+                        crate::i18n::t("cloud_managed_cluster_add_failed"),
+                        crate::i18n::t("cloud_managed_cluster_vault_locked")
+                    )));
+                };
                 let mut toast = if let Some(existing) = existing {
                     // A refresh: the file is new, so the context it names
                     // is re-read too rather than assumed stable across
-                    // fetches. Same path, same account; only the config
-                    // changes, and only when the file names a context.
-                    if !context.is_empty()
-                        && let Ok(mut cfg) =
-                            serde_json::from_str::<serde_json::Value>(&existing.config)
-                        && cfg.get("context").and_then(|c| c.as_str()) != Some(context.as_str())
+                    // fetches. Same account; only the config changes, and
+                    // only when the context it names moved.
+                    if let Ok(mut cfg) = serde_json::from_str::<serde_json::Value>(&existing.config)
                     {
-                        let mut refreshed = existing.clone();
-                        cfg["context"] = serde_json::Value::String(context);
-                        refreshed.config = cfg.to_string();
-                        if let Err(e) = vault.save_cloud_profile(&refreshed, None) {
-                            return Ok(self.show_toast(format!(
-                                "{}: {e}",
-                                crate::i18n::t("cloud_managed_cluster_add_failed")
-                            )));
+                        let context_moved = !context.is_empty()
+                            && cfg.get("context").and_then(|c| c.as_str()) != Some(context.as_str());
+                        if context_moved {
+                            let mut refreshed = existing.clone();
+                            cfg["context"] = serde_json::Value::String(context);
+                            refreshed.config = cfg.to_string();
+                            if let Err(e) = vault.save_cloud_profile(&refreshed, None) {
+                                return Ok(self.show_toast(format!(
+                                    "{}: {e}",
+                                    crate::i18n::t("cloud_managed_cluster_add_failed")
+                                )));
+                            }
+                            self.load_data_from_vault();
                         }
-                        self.load_data_from_vault();
                     }
                     crate::i18n::t("cloud_managed_cluster_refreshed").to_string()
                 } else {
@@ -328,6 +368,9 @@ impl Oryxis {
                     }
                     profile.config = cfg.to_string();
                     if let Err(e) = vault.save_cloud_profile(&profile, None) {
+                        // No account will point at the file: drop it
+                        // rather than leave a credential nothing lists.
+                        let _ = std::fs::remove_file(&path);
                         return Ok(self.show_toast(format!(
                             "{}: {e}",
                             crate::i18n::t("cloud_managed_cluster_add_failed")
@@ -347,9 +390,12 @@ impl Oryxis {
                 });
                 return Ok(self.show_toast_secs(toast, 8));
             }
-            CloudMessage::CloudDiscoverManagedClusterFailed(e) => {
+            CloudMessage::CloudDiscoverManagedClusterFailed { path, error } => {
+                self.cloud_discover
+                    .managed_in_flight
+                    .remove(std::path::Path::new(&path));
                 return Ok(self.show_toast(format!(
-                    "{}: {e}",
+                    "{}: {error}",
                     crate::i18n::t("cloud_managed_cluster_add_failed")
                 )));
             }
@@ -359,5 +405,42 @@ impl Oryxis {
             m => return Err(m),
         }
         Ok(Task::none())
+    }
+}
+
+impl Oryxis {
+    /// Remove managed kubeconfig files (`~/.oryxis/kubeconfig/`) that no
+    /// Kubernetes account points at any more. The UI delete removes its
+    /// own file (`DeleteCloudProfile`), but an account deleted on ANOTHER
+    /// device arrives as a sync tombstone, which runs no UI arm, and
+    /// would leave a cluster credential on disk that no list shows.
+    ///
+    /// The account list is read from the vault here, never from
+    /// `self.cloud_profiles` (which `load_vault_entities` fills with an
+    /// empty default when the read fails), and a failed read or a locked
+    /// vault sweeps nothing: an empty list would read as "nothing is
+    /// referenced" and take every file with it. Files whose fetch is in
+    /// flight are spared, since their account does not exist yet.
+    pub(crate) fn sweep_orphan_kubeconfigs(&self) {
+        let Some(vault) = self.vault.as_ref().filter(|v| !v.is_locked()) else {
+            return;
+        };
+        let Ok(profiles) = vault.list_cloud_profiles() else {
+            return;
+        };
+        let Some(dir) = crate::kubeconfig_file::dir() else {
+            return;
+        };
+        let referenced = crate::kubeconfig_file::referenced_paths(&profiles);
+        for path in crate::kubeconfig_file::sweep_unreferenced(
+            &dir,
+            &referenced,
+            &self.cloud_discover.managed_in_flight,
+        ) {
+            tracing::info!(
+                "removed kubeconfig {} (no Kubernetes account points at it)",
+                path.display()
+            );
+        }
     }
 }

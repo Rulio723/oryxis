@@ -60,6 +60,13 @@ pub(crate) struct CloudDiscoverUi {
     /// in the picker's filter doesn't overwrite the user's chosen
     /// folder name.
     pub(crate) default_group_picker_search: String,
+    /// Managed-cluster kubeconfig files (`kubeconfig_file::path_for`)
+    /// whose fetch is running. Disables that cluster's Add / Refresh
+    /// button, refuses a second request for the same file, and keeps
+    /// `sweep_unreferenced` off a file written before the account that
+    /// will point at it exists. Deliberately NOT cleared with the screen:
+    /// the task outlives the panel, and the completion is what ends it.
+    pub(crate) managed_in_flight: std::collections::HashSet<std::path::PathBuf>,
 }
 
 impl Default for CloudDiscoverUi {
@@ -78,6 +85,7 @@ impl Default for CloudDiscoverUi {
             default_group_picker_open: false,
             default_group_combo_bounds: crate::widgets::new_bounds_cell(),
             default_group_picker_search: String::new(),
+            managed_in_flight: std::collections::HashSet::new(),
         }
     }
 }

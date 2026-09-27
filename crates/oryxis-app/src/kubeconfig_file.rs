@@ -15,10 +15,17 @@
 //!
 //! The file holds a credential, so it is written 0600 through a
 //! temporary sibling and a rename, and removed with the account that
-//! owned it. Everything but the write is pure and tested.
+//! owned it. An account can also leave by SYNC (a peer deleted it), which
+//! runs no UI arm, so `sweep_unreferenced` removes whatever file of ours
+//! no Kubernetes account points at any more. Everything but the file
+//! operations is pure and tested.
 
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use uuid::Uuid;
 
 /// Directory the per-cluster files live in.
 pub(crate) fn dir() -> Option<PathBuf> {
@@ -26,13 +33,15 @@ pub(crate) fn dir() -> Option<PathBuf> {
 }
 
 /// One normal path component out of a provider-supplied id: ASCII
-/// letters, digits, `.`, `_` and `-`, never empty, never `.` / `..`.
-/// Cluster ids arrive over the plugin boundary from a remote API, so
-/// they are confined before they become part of a path (the same
-/// traversal class the plugin cache confines a manifest version to).
+/// letters, digits, `.`, `_` and `-`, never empty, never `.` / `..`,
+/// never leading with `-`. Cluster ids arrive over the plugin boundary
+/// from a remote API, so they are confined before they become part of a
+/// path (the same traversal class the plugin cache confines a manifest
+/// version to), and before they are handed back to a CLI as the value of
+/// `--ClusterId`, where a leading `-` would read as a flag.
 pub(crate) fn sanitize_component(s: &str) -> Option<String> {
     let t = s.trim();
-    if t.is_empty() || t == "." || t == ".." {
+    if t.is_empty() || t == "." || t == ".." || t.starts_with('-') {
         return None;
     }
     if !t
@@ -44,15 +53,72 @@ pub(crate) fn sanitize_component(s: &str) -> Option<String> {
     Some(t.to_string())
 }
 
-/// The file a cluster's kubeconfig is stored in:
-/// `<dir>/<family>-<cluster id>.yaml`. Deterministic, so the discovery
-/// view can tell an added cluster from a new one without asking the
-/// provider, and a re-add overwrites in place.
-pub(crate) fn path_for(family: &str, cluster_id: &str) -> Result<PathBuf, String> {
+/// The file a cluster's kubeconfig is stored in, as fetched through one
+/// cloud account: `<dir>/<family>-<cluster id>-<account id>.yaml`.
+/// Deterministic, so the discovery view can tell an added cluster from a
+/// new one without asking the provider, and a re-add overwrites in place.
+///
+/// The ACCOUNT is part of the name because the credential is the
+/// account's, not the cluster's: two Alibaba Cloud accounts (two RAM
+/// users with different RBAC) can see the same cluster, and keyed on the
+/// cluster alone the second one's Add would read as a refresh and
+/// silently replace the first account's credential with its own.
+pub(crate) fn path_for(family: &str, account: Uuid, cluster_id: &str) -> Result<PathBuf, String> {
     let family = sanitize_component(family).ok_or_else(|| "invalid cluster family".to_string())?;
     let id = sanitize_component(cluster_id).ok_or_else(|| "invalid cluster id".to_string())?;
     let dir = dir().ok_or_else(|| "no home directory to store the kubeconfig in".to_string())?;
-    Ok(dir.join(format!("{family}-{id}.yaml")))
+    Ok(dir.join(format!("{family}-{id}-{}.yaml", account.simple())))
+}
+
+/// The managed kubeconfig paths the given Kubernetes accounts point at
+/// (`kubeconfig` in the profile config, under our directory only).
+pub(crate) fn referenced_paths(profiles: &[oryxis_core::models::CloudProfile]) -> HashSet<PathBuf> {
+    profiles
+        .iter()
+        .filter(|p| p.provider == "k8s")
+        .filter_map(|p| serde_json::from_str::<serde_json::Value>(&p.config).ok())
+        .filter_map(|v| v.get("kubeconfig")?.as_str().map(str::to_string))
+        .filter(|path| is_managed_path(path))
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Remove every kubeconfig file of ours in `dir` that no account
+/// references and that is not `in_flight` (an Add whose file is written
+/// before the account that points at it exists). Returns what it removed.
+///
+/// Only visible `*.yaml` files are candidates: a `.<name>.tmp` sibling
+/// belongs to a write still running, and anything else in the directory
+/// is not something this module wrote. The caller must hand in the FULL
+/// account list of an unlocked vault; an empty list from a vault that is
+/// still locked would read as "nothing is referenced" and wipe them all.
+pub(crate) fn sweep_unreferenced(
+    dir: &Path,
+    referenced: &HashSet<PathBuf>,
+    in_flight: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut removed = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let visible_yaml = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| !n.starts_with('.'))
+            && path.extension().and_then(|e| e.to_str()) == Some("yaml");
+        if !visible_yaml || !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        if referenced.contains(&path) || in_flight.contains(&path) {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            removed.push(path);
+        }
+    }
+    removed
 }
 
 /// True when `path` is one of ours, so deleting the Kubernetes account
@@ -81,11 +147,13 @@ pub(crate) fn current_context(yaml: &str) -> Option<String> {
 }
 
 /// True when every `server:` the kubeconfig names is a private address
-/// (RFC 1918, link-local or loopback). Drives the note that such a file
-/// only works from inside the cluster's VPC; a cluster whose public
-/// endpoint is off gets exactly this shape back from ACK. Hostnames
-/// are not resolved, so a private endpoint behind a DNS name reads as
-/// public here.
+/// (RFC 1918, CGNAT, link-local or loopback). Drives the note that such
+/// a file only works from inside the cluster's VPC. Which shape a cluster
+/// whose public endpoint is off gets back is provider-specific and, for
+/// ACK, not measured (see `oryxis_cloud_aliyun::ack::user_kubeconfig`);
+/// TKE documents a placeholder domain instead. Hostnames are not
+/// resolved, so a private endpoint behind a DNS name reads as public
+/// here.
 pub(crate) fn servers_are_private(yaml: &str) -> bool {
     let mut seen = false;
     for line in yaml.lines() {
@@ -113,7 +181,12 @@ fn is_private_server(url: &str) -> bool {
             .unwrap_or(authority)
     };
     match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(v4)) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        Ok(std::net::IpAddr::V4(v4)) => {
+            // 100.64.0.0/10, the shared address space (RFC 6598): carrier
+            // NAT, and what several clouds hand out inside a VPC.
+            let cgnat = v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64;
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || cgnat
+        }
         Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback() || v6.is_unique_local(),
         Err(_) => false,
     }
@@ -131,7 +204,12 @@ pub(crate) fn write_secret_file(path: &Path, contents: &str) -> io::Result<()> {
     let file_name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "kubeconfig path has no name")
     })?;
-    let tmp = dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    // Unique per WRITE, not per process: two fetches of the same cluster
+    // in flight at once would otherwise share one temporary and interleave
+    // their bytes, or have the second rename find the first one's gone.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{file_name}.{}.{seq}.tmp", std::process::id()));
     {
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true);
@@ -166,29 +244,76 @@ mod tests {
             Some("c3fb96524f9274b4495df0f12a6b50000")
         );
         for bad in [
-            "", " ", ".", "..", "../x", "a/b", "a\\b", "a b", "c:d", "n\u{e9}",
+            "", " ", ".", "..", "../x", "a/b", "a\\b", "a b", "c:d", "n\u{e9}", "-x", "--profile",
         ] {
             assert_eq!(sanitize_component(bad), None, "{bad:?} must be rejected");
         }
     }
 
     #[test]
-    fn path_is_deterministic_and_named_after_family_and_id() {
-        let a = path_for("tke", "cls-abc12345").unwrap();
-        let b = path_for("tke", "cls-abc12345").unwrap();
+    fn path_is_deterministic_and_named_after_family_id_and_account() {
+        let acct = Uuid::parse_str("0f8e2c1a-7b3d-4e5f-9a6b-1c2d3e4f5a6b").unwrap();
+        let a = path_for("tke", acct, "cls-abc12345").unwrap();
+        let b = path_for("tke", acct, "cls-abc12345").unwrap();
         assert_eq!(a, b);
         assert_eq!(
             a.file_name().unwrap().to_str().unwrap(),
-            "tke-cls-abc12345.yaml"
+            "tke-cls-abc12345-0f8e2c1a7b3d4e5f9a6b1c2d3e4f5a6b.yaml"
         );
         assert_eq!(a.parent().unwrap(), dir().unwrap());
-        assert!(path_for("ack", "../etc").is_err());
-        assert!(path_for("", "x").is_err());
+        // Two accounts seeing one cluster keep two credentials.
+        assert_ne!(a, path_for("tke", Uuid::new_v4(), "cls-abc12345").unwrap());
+        assert!(path_for("ack", acct, "../etc").is_err());
+        assert!(path_for("", acct, "x").is_err());
+    }
+
+    #[test]
+    fn sweep_removes_only_unreferenced_visible_yaml() {
+        let tmp = std::env::temp_dir().join(format!(
+            "oryxis-kubeconfig-sweep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let kept = tmp.join("ack-c1-a.yaml");
+        let orphan = tmp.join("ack-c2-a.yaml");
+        let flying = tmp.join("tke-c3-a.yaml");
+        let temp_sibling = tmp.join(".ack-c4-a.yaml.1.0.tmp");
+        let foreign = tmp.join("notes.txt");
+        for p in [&kept, &orphan, &flying, &temp_sibling, &foreign] {
+            std::fs::write(p, "x").unwrap();
+        }
+        let referenced: HashSet<PathBuf> = [kept.clone()].into_iter().collect();
+        let in_flight: HashSet<PathBuf> = [flying.clone()].into_iter().collect();
+        let removed = sweep_unreferenced(&tmp, &referenced, &in_flight);
+        assert_eq!(removed, vec![orphan.clone()]);
+        assert!(!orphan.exists());
+        for p in [&kept, &flying, &temp_sibling, &foreign] {
+            assert!(p.exists(), "{p:?} must survive");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn referenced_paths_reads_managed_k8s_accounts_only() {
+        let ours = path_for("ack", Uuid::new_v4(), "c1").unwrap();
+        let mut k8s = oryxis_core::models::CloudProfile::new("ACK: prod", "k8s");
+        k8s.config = serde_json::json!({ "kubeconfig": ours }).to_string();
+        let mut by_hand = oryxis_core::models::CloudProfile::new("mine", "k8s");
+        by_hand.config = serde_json::json!({ "kubeconfig": "/home/u/.kube/config" }).to_string();
+        let mut other = oryxis_core::models::CloudProfile::new("aws", "aws");
+        other.config = serde_json::json!({ "kubeconfig": ours }).to_string();
+        let set = referenced_paths(&[k8s, by_hand, other]);
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&ours));
     }
 
     #[test]
     fn managed_path_is_only_our_directory() {
-        let ours = path_for("ack", "c123").unwrap();
+        let ours = path_for("ack", uuid::Uuid::nil(), "c123").unwrap();
         assert!(is_managed_path(ours.to_str().unwrap()));
         // A sibling directory with the same file name is not ours.
         let elsewhere = dir().unwrap().parent().unwrap().join("ack-c123.yaml");
@@ -238,6 +363,10 @@ mod tests {
         ));
         // No server at all: nothing to call private.
         assert!(!servers_are_private("kind: Config\n"));
+        assert!(is_private_server("https://100.64.0.1:6443"));
+        assert!(is_private_server("https://100.127.255.254"));
+        assert!(!is_private_server("https://100.128.0.1:6443"));
+        assert!(!is_private_server("https://100.63.255.255:6443"));
         assert!(is_private_server("https://[fd00::1]:6443"));
         assert!(!is_private_server("https://[2001:db8::1]:6443"));
     }

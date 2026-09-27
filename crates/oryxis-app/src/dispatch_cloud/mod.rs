@@ -87,7 +87,7 @@ impl Oryxis {
             | CloudMessage::CloudDiscoverAksAdded(..)
             | CloudMessage::CloudDiscoverAddManagedCluster { .. }
             | CloudMessage::CloudDiscoverManagedClusterStored { .. }
-            | CloudMessage::CloudDiscoverManagedClusterFailed(..)
+            | CloudMessage::CloudDiscoverManagedClusterFailed { .. }
             | CloudMessage::CloudDiscoverDefaultTransportChanged(..)
             | CloudMessage::CloudDiscoverDefaultGroupNameChanged(..)
             | CloudMessage::CloudDiscoverDefaultGroupPick(..)

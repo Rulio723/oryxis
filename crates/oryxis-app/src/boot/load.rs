@@ -21,6 +21,14 @@ impl Oryxis {
             self.vault = Some(vault);
         }
 
+        // A managed kubeconfig whose account is gone (deleted here, or
+        // tombstoned by a peer and applied by a sync round, both of which
+        // land in this reload) is a live cluster credential nothing lists
+        // any more. Swept here because every door that can remove an
+        // account passes through this function; a locked vault sweeps
+        // nothing.
+        self.sweep_orphan_kubeconfigs();
+
         // Recreate pinned tabs (dormant; reopen on first select).
         self.restore_pinned_tabs_dormant();
         // Then last session's ordinary tabs, also dormant, when the user

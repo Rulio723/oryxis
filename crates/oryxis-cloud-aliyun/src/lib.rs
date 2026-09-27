@@ -203,6 +203,12 @@ fn classify_text(text: &str) -> CloudError {
 /// like the other CLI providers'.
 const ALIYUN_BINS: &[&str] = &["aliyun"];
 
+/// Upper bound on one `aliyun` invocation. Every call is a single
+/// read-only API request (a discovery page, a kubeconfig), so a CLI still
+/// running after this is stuck on the network, and saying so beats a
+/// spinner that only the plugin host's own deadline would ever end.
+const CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Run `aliyun <sub...> --profile <p> --region <r>` and return stdout
 /// bytes on success. Every call this crate makes is read-only, so a
 /// prompt-free failure is the worst case of a TTY-less spawn.
@@ -217,7 +223,17 @@ pub(crate) async fn run_aliyun(cfg: &AliyunConfig, sub: &[&str]) -> Result<Vec<u
         // the other CLI providers use).
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000);
-        match cmd.output().await {
+        // The timeout drops the `output()` future, and a dropped child
+        // would otherwise keep running (and keep its pipes) behind us.
+        cmd.kill_on_drop(true);
+        let run = tokio::time::timeout(CLI_TIMEOUT, cmd.output()).await;
+        let Ok(run) = run else {
+            return Err(CloudError::Network(format!(
+                "aliyun did not answer within {} s",
+                CLI_TIMEOUT.as_secs()
+            )));
+        };
+        match run {
             Ok(o) => {
                 output = Some(o);
                 break;

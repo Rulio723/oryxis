@@ -1086,8 +1086,8 @@ impl Oryxis {
             .collect();
         if !managed_filtered.is_empty() {
             // Dup-guard by the kubeconfig FILE a k8s profile points at,
-            // which is deterministic per (family, id): no context name
-            // has to be known before the fetch.
+            // which is deterministic per (family, cluster id, cloud
+            // account): no context name has to be known before the fetch.
             let existing_kubeconfigs: std::collections::HashSet<String> = self
                 .cloud_profiles
                 .iter()
@@ -1147,10 +1147,18 @@ impl Oryxis {
                 if collapsed {
                     continue;
                 }
+                let account = self.cloud_discover.profile_id.unwrap_or_default();
                 for c in rows {
-                    let added = crate::kubeconfig_file::path_for(&c.family, &c.id)
-                        .map(|p| existing_kubeconfigs.contains(&p.to_string_lossy().into_owned()))
-                        .unwrap_or(false);
+                    // Added = an account points at this (cluster, account)
+                    // file. Another cloud account's file for the same
+                    // cluster does not count: it is a different credential.
+                    let path = crate::kubeconfig_file::path_for(&c.family, account, &c.id).ok();
+                    let added = path
+                        .as_ref()
+                        .is_some_and(|p| existing_kubeconfigs.contains(&p.to_string_lossy().into_owned()));
+                    let fetching = path
+                        .as_ref()
+                        .is_some_and(|p| self.cloud_discover.managed_in_flight.contains(p));
                     let mut info = format!("{}  ·  {}", c.name, c.region);
                     if !c.version.trim().is_empty() {
                         info.push_str(&format!("  ·  {}", c.version));
@@ -1169,7 +1177,9 @@ impl Oryxis {
                         id: c.id.clone(),
                         name: c.name.clone(),
                     });
-                    let button_label = if added {
+                    let button_label = if fetching {
+                        t("cloud_managed_cluster_fetching")
+                    } else if added {
                         t("cloud_managed_cluster_refresh")
                     } else {
                         t("cloud_managed_cluster_add")
@@ -1193,13 +1203,16 @@ impl Oryxis {
                                     .size(11)
                                     .color(OryxisColors::t().text_primary),
                             )
-                            .on_press(add_msg)
+                            // Disabled while the fetch runs, so a second
+                            // click cannot race the first one's file.
+                            .on_press_maybe((!fetching).then_some(add_msg))
                             .padding(Padding { top: 3.0, right: 10.0, bottom: 3.0, left: 10.0 })
                             .style(|_, status| {
                                 let bg = match status {
                                     BtnStatus::Hovered | BtnStatus::Pressed => {
                                         OryxisColors::t().bg_hover
                                     }
+                                    BtnStatus::Disabled => OryxisColors::t().bg_primary,
                                     _ => OryxisColors::t().bg_surface,
                                 };
                                 button::Style {

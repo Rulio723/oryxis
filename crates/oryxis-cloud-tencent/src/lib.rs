@@ -174,6 +174,12 @@ pub(crate) fn classify_tccli_error(stderr: &str) -> CloudError {
 /// like the other CLI providers'.
 const TCCLI_BINS: &[&str] = &["tccli"];
 
+/// Upper bound on one `tccli` invocation. Every call is a single
+/// read-only API request (a discovery page, a kubeconfig), so a CLI still
+/// running after this is stuck on the network, and saying so beats a
+/// spinner that only the plugin host's own deadline would ever end.
+const CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Run `tccli <sub...> --profile <p> --region <r> --output json` and
 /// return stdout bytes on success. Every call this crate makes is
 /// read-only, so a prompt-free failure is the worst case of a TTY-less
@@ -189,7 +195,17 @@ pub(crate) async fn run_tccli(cfg: &TencentConfig, sub: &[&str]) -> Result<Vec<u
         // the other CLI providers use).
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000);
-        match cmd.output().await {
+        // The timeout drops the `output()` future, and a dropped child
+        // would otherwise keep running (and keep its pipes) behind us.
+        cmd.kill_on_drop(true);
+        let run = tokio::time::timeout(CLI_TIMEOUT, cmd.output()).await;
+        let Ok(run) = run else {
+            return Err(CloudError::Network(format!(
+                "tccli did not answer within {} s",
+                CLI_TIMEOUT.as_secs()
+            )));
+        };
+        match run {
             Ok(o) => {
                 output = Some(o);
                 break;
