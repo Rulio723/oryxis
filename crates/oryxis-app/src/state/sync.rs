@@ -268,8 +268,19 @@ pub(crate) struct RelayDeployForm {
     /// and the relay binds loopback. Off is plain HTTP to the relay
     /// port, adopted as `http://<host>:<port>` with a warning.
     pub use_caddy: bool,
-    /// A probe or a run is in flight (disables every button).
+    /// A probe or a run is in flight. Disables every button AND every
+    /// input the plan is built from (port, Caddy, host, the wizard's
+    /// domain / public port / token), so nothing on screen can change
+    /// under a run: the only ways to stop one are the ones that mean it
+    /// (closing the section, the manual lock).
     pub busy: bool,
+    /// The in-flight probe or run, abort-on-drop. Dropping it (which
+    /// [`Self::reset_probe`] does) STOPS the task rather than leaving it
+    /// to finish unobserved: a run is commands executing as root on a
+    /// remote host, and the `seq` bump alone only discarded its results
+    /// while the stream, holding its own clone of the session, carried
+    /// on.
+    pub task: Option<iced::task::Handle>,
     /// What the probe learned, kept until the host changes or a new
     /// probe runs.
     pub probe: Option<crate::relay_deploy::HostProbe>,
@@ -317,9 +328,14 @@ impl RelayDeployForm {
         p.parse::<u16>().ok().filter(|p| *p != 0)
     }
 
-    /// Forget the probe, the parked session and the plan: the answer no
-    /// longer describes the host (or the form) it was taken for.
+    /// Forget the probe, the parked session and the plan, and stop
+    /// whatever probe or run is in flight: the answer no longer
+    /// describes the host (or the form) it was taken for.
     pub fn reset_probe(&mut self) {
+        // Abort-on-drop: this is what actually ends the stream (and with
+        // it the session clone it holds).
+        self.task = None;
+        self.busy = false;
         self.probe = None;
         self.session = None;
         self.verified = None;

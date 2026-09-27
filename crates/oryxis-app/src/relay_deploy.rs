@@ -40,6 +40,29 @@ pub(crate) const SERVICE_USER: &str = "oryxis";
 /// Default relay port, the one every artifact of the level-1 wizard
 /// has always used.
 pub(crate) const DEFAULT_PORT: u16 = 8080;
+/// The Caddyfile the deploy copies aside before touching it, and puts
+/// back when the result does not validate or does not load. Left on the
+/// host afterwards: it is the configuration as it was before the last
+/// deploy, which is what a person undoing it by hand wants.
+pub(crate) const CADDYFILE_BACKUP: &str = "/etc/caddy/Caddyfile.oryxis-backup";
+/// First line of the block the deploy owns in the Caddyfile.
+pub(crate) const CADDY_BEGIN: &str = "# oryxis-relay begin";
+/// Last line of the block the deploy owns in the Caddyfile.
+pub(crate) const CADDY_END: &str = "# oryxis-relay end";
+/// How long the probe command may run. It only reads: a host taking
+/// longer than this is hung on something (a wedged `systemctl`, a DNS
+/// stall in `sudo`), not busy.
+pub(crate) const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long one deploy step may run on the host. Generous (a slow disk
+/// installing ten megabytes, a `systemctl restart` waiting on a unit's
+/// stop timeout), but bounded, so a hung step fails the run instead of
+/// holding the card busy forever.
+pub(crate) const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+/// How long the public health check keeps retrying. The first request
+/// often lands before Caddy has its certificate (ACME takes a few to a
+/// few tens of seconds), so one attempt would report a working deploy
+/// as failed.
+pub(crate) const HEALTH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90);
 /// What replaces the token in every log line.
 pub(crate) const TOKEN_MASK: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
 
@@ -136,7 +159,8 @@ impl HostProbe {
 /// Read the probe's stdout. Unknown keys are ignored, a missing key
 /// takes the conservative default (no systemd, no privilege, no tools),
 /// and only `uname` is required: without it nothing else is worth
-/// deciding.
+/// deciding. The error carries what the host printed instead, trimmed,
+/// for the caller to word.
 pub(crate) fn parse_probe(stdout: &str) -> Result<HostProbe, String> {
     let mut os = None;
     let mut machine = None;
@@ -179,7 +203,7 @@ pub(crate) fn parse_probe(stdout: &str) -> Result<HostProbe, String> {
         }
     }
     let (Some(os), Some(machine)) = (os, machine) else {
-        return Err(format!("probe returned no uname line: {}", stdout.trim()));
+        return Err(stdout.trim().to_string());
     };
     Ok(HostProbe {
         os,
@@ -255,6 +279,44 @@ pub(crate) fn caddy_site(site: &str, port: u16) -> String {
     format!("{site} {{\n    reverse_proxy 127.0.0.1:{port}\n}}\n")
 }
 
+/// The `awk` program the Caddy step rewrites the Caddyfile with: every
+/// line outside the managed block survives, the block itself (between
+/// [`CADDY_BEGIN`] and [`CADDY_END`]) is dropped so the step can append
+/// the current one, and blank lines are carried only when something
+/// follows them, so a re-run does not grow the file by one blank line
+/// per deploy. Single-quoted in the script, so it holds no `'`.
+///
+/// It also drops the UN-fenced block the first generator appended (a
+/// nightly-only shape, before the fence existed): exactly
+/// `<site> {` / `reverse_proxy 127.0.0.1:<port>` / `}` for THIS deploy's
+/// site, passed in as the awk variable `site`. Left in place it would
+/// define the site twice beside the fenced block, `caddy validate`
+/// would refuse, and the deploy could never converge without a manual
+/// edit. Any other shape, or another site, is the user's and passes
+/// through; a partial match is printed back as it was.
+pub(crate) const CADDY_STRIP_AWK: &str = "\
+function out(line) {
+    if (line ~ /^[[:space:]]*$/) { blank++; return }
+    while (blank > 0) { print \"\"; blank-- }
+    print line
+}
+function flush() { if (held >= 1) out(h1); if (held >= 2) out(h2); held = 0 }
+skip { if ($0 == \"# oryxis-relay end\") skip = 0; next }
+held == 1 {
+    if ($0 ~ /^[[:space:]]*reverse_proxy 127[.]0[.]0[.]1:[0-9]+[[:space:]]*$/) { h2 = $0; held = 2; next }
+    flush()
+}
+held == 2 {
+    if ($0 ~ /^[[:space:]]*[}][[:space:]]*$/) { held = 0; blank = 0; next }
+    flush()
+}
+tolower($0) == tolower(site \" {\") { flush(); h1 = $0; held = 1; next }
+/^# oryxis-relay begin$/ { flush(); skip = 1; blank = 0; next }
+/^# oryxis-relay end$/ { next }
+{ out($0) }
+END { flush() }
+";
+
 /// The one thing the health check on the host needs to know: how to
 /// GET a URL with a short timeout.
 fn http_get_command(client: HttpClient, url: &str) -> Option<String> {
@@ -301,6 +363,10 @@ pub(crate) struct DeployPlan {
     pub staging: String,
     /// The endpoint the app adopts once both health checks pass.
     pub public_url: String,
+    /// Plain HTTP to a host whose address is an IPv6 literal: the relay
+    /// has to listen on the IPv6 wildcard, since `0.0.0.0` never
+    /// answers the address the URL names.
+    pub listen_v6: bool,
 }
 
 /// The steps a deploy reports, in order. `Probe` and `Download` happen
@@ -347,10 +413,13 @@ pub(crate) struct StepScript {
 
 impl DeployPlan {
     /// The bind address the unit gets: loopback behind Caddy, every
-    /// interface when the relay is what the internet reaches.
+    /// interface when the relay is what the internet reaches (the IPv6
+    /// wildcard, dual stack on Linux, when the host is an IPv6 literal).
     pub(crate) fn bind(&self) -> &'static str {
         if self.tls_site.is_some() {
             "127.0.0.1"
+        } else if self.listen_v6 {
+            "[::]"
         } else {
             "0.0.0.0"
         }
@@ -361,6 +430,18 @@ impl DeployPlan {
     /// created, the binary is (re)installed, the unit is rewritten and
     /// the service RESTARTED rather than merely enabled, so a new token
     /// or port takes effect on a second run.
+    ///
+    /// The Caddy step owns exactly one block of the Caddyfile, fenced by
+    /// [`CADDY_BEGIN`] / [`CADDY_END`], and REPLACES it on every run, so
+    /// a re-run with another relay port repoints the proxy instead of
+    /// leaving the old block in charge. It never leaves Caddy worse off
+    /// than it found it: the file is copied to [`CADDYFILE_BACKUP`]
+    /// first, the result must pass `caddy validate`, and a reload is
+    /// all it asks of a running Caddy (a restart with a broken file
+    /// would take every other site on the host down with it). Any
+    /// failure puts the backup back and fails the step. A site the user
+    /// already defined by hand outside the block makes the validation
+    /// fail as an ambiguous site, which is reported, never merged.
     pub(crate) fn scripts(&self) -> Vec<StepScript> {
         let mut out = Vec::new();
         let staging = &self.staging;
@@ -408,13 +489,29 @@ impl DeployPlan {
                 privileged: true,
                 body: format!(
                     "set -eu\n\
-                     if ! grep -qF '{site} {{' {CADDYFILE} 2>/dev/null; then\n\
-                     printf '\\n' >> {CADDYFILE}\n\
-                     cat >> {CADDYFILE} <<'ORYXIS_EOF'\n\
+                     restore() {{\n\
+                     cat {CADDYFILE_BACKUP} > {CADDYFILE}\n\
+                     echo \"$1; the previous Caddyfile was restored\" >&2\n\
+                     exit 1\n\
+                     }}\n\
+                     [ -f {CADDYFILE} ] || : > {CADDYFILE}\n\
+                     cp -p {CADDYFILE} {CADDYFILE_BACKUP}\n\
+                     awk -v site='{site}' '{CADDY_STRIP_AWK}' {CADDYFILE_BACKUP} > {CADDYFILE}.oryxis-new\n\
+                     printf '\\n%s\\n' '{CADDY_BEGIN}' >> {CADDYFILE}.oryxis-new\n\
+                     cat >> {CADDYFILE}.oryxis-new <<'ORYXIS_EOF'\n\
                      {block}\
                      ORYXIS_EOF\n\
+                     printf '%s\\n' '{CADDY_END}' >> {CADDYFILE}.oryxis-new\n\
+                     cat {CADDYFILE}.oryxis-new > {CADDYFILE}\n\
+                     rm -f {CADDYFILE}.oryxis-new\n\
+                     if ! caddy validate --adapter caddyfile --config {CADDYFILE}; then\n\
+                     restore \"caddy rejected the configuration (is {site} defined elsewhere in {CADDYFILE}?)\"\n\
                      fi\n\
-                     systemctl reload caddy || systemctl restart caddy\n"
+                     if systemctl is-active --quiet caddy; then\n\
+                     systemctl reload caddy || restore \"caddy did not reload the configuration\"\n\
+                     else\n\
+                     systemctl start caddy || restore \"caddy did not start with the configuration\"\n\
+                     fi\n"
                 ),
             });
         }
@@ -514,6 +611,116 @@ pub(crate) fn caddy_site_address(domain: &str, public_port: &str) -> String {
     }
 }
 
+/// Why the wizard's domain / public port cannot become a TLS endpoint.
+/// Both values end up inside a script that runs as root, so they are
+/// checked for SHAPE here rather than trusted because the consent
+/// shows them: a typo would otherwise be caught by nothing before Caddy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EndpointError {
+    /// No domain typed.
+    NoDomain,
+    /// Neither a DNS name nor an IP literal.
+    BadDomain,
+    /// A public port that is not 1..=65535.
+    BadPort,
+}
+
+impl EndpointError {
+    /// The i18n key of the card's line for this error.
+    pub(crate) fn label_key(self) -> &'static str {
+        match self {
+            Self::NoDomain => "relay_deploy_no_domain",
+            Self::BadDomain => "relay_deploy_bad_domain",
+            Self::BadPort => "relay_deploy_bad_public_port",
+        }
+    }
+}
+
+/// A validated public TLS endpoint: the Caddyfile site address and the
+/// `https://` URL the app adopts, from the same normalized host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TlsEndpoint {
+    pub site: String,
+    pub base_url: String,
+}
+
+/// Validate the wizard's domain and public port and render the endpoint
+/// they describe. The domain tolerates the scheme prefix and trailing
+/// slash `RelayWizardForm::base_url` tolerates; an IPv6 literal (bare or
+/// bracketed) is rendered bracketed in both forms.
+pub(crate) fn tls_endpoint(domain: &str, public_port: &str) -> Result<TlsEndpoint, EndpointError> {
+    let host = domain
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
+    if host.is_empty() {
+        return Err(EndpointError::NoDomain);
+    }
+    let host = url_host(host).ok_or(EndpointError::BadDomain)?;
+    let port = public_port.trim();
+    let port = if port.is_empty() {
+        443
+    } else {
+        port.parse::<u16>().ok().filter(|p| *p != 0).ok_or(EndpointError::BadPort)?
+    };
+    let authority = if port == 443 { host } else { format!("{host}:{port}") };
+    Ok(TlsEndpoint {
+        base_url: format!("https://{authority}"),
+        site: authority,
+    })
+}
+
+/// `host` as it goes into a URL authority, or `None` when it is neither
+/// a DNS name nor an IP literal. IPv6 comes back bracketed.
+pub(crate) fn url_host(host: &str) -> Option<String> {
+    let bare = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    if let Ok(v6) = bare.parse::<std::net::Ipv6Addr>() {
+        return Some(format!("[{v6}]"));
+    }
+    if bare.parse::<std::net::Ipv4Addr>().is_ok() {
+        return Some(bare.to_string());
+    }
+    is_dns_name(bare).then(|| bare.trim_end_matches('.').to_ascii_lowercase())
+}
+
+/// Whether `name` is a DNS host name: dot-separated labels of ASCII
+/// letters, digits and inner hyphens, 1..=63 bytes each, 253 in all
+/// (one trailing dot allowed). IDNs are expected in their `xn--` form,
+/// the spelling a certificate carries.
+fn is_dns_name(name: &str) -> bool {
+    let name = name.strip_suffix('.').unwrap_or(name);
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+/// The `http://` endpoint of a relay reached directly on the host's own
+/// address, and whether that address is an IPv6 literal (so the relay
+/// must listen on the IPv6 wildcard). `None` when the host's address is
+/// not something a URL can carry.
+pub(crate) fn http_endpoint(hostname: &str, port: u16) -> Option<(String, bool)> {
+    let hostname = hostname.trim();
+    // A vault host's address was good enough to dial, so it is held to
+    // what a URL authority can carry rather than to strict DNS rules:
+    // an `/etc/hosts` name with an underscore is a real host here.
+    let host = url_host(hostname).or_else(|| {
+        (!hostname.is_empty()
+            && hostname
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')))
+        .then(|| hostname.to_string())
+    })?;
+    let v6 = host.starts_with('[');
+    Some((format!("http://{host}:{port}"), v6))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +753,7 @@ mod tests {
             } else {
                 "http://vps.example.com:8080".into()
             },
+            listen_v6: false,
         }
     }
 
@@ -643,6 +851,15 @@ mod tests {
         assert!(scripts[1].body.contains("ORYXIS_RELAY_TOKEN=sekrit-token-value\n"));
         assert!(scripts[1].body.contains("systemctl restart oryxis-relay\n"));
         assert!(scripts[2].body.contains("relay.example.com {\n    reverse_proxy 127.0.0.1:8080\n}\n"));
+        // The Caddy step owns a fenced block, validates before loading,
+        // restores on failure and never restarts a running Caddy.
+        let caddy = &scripts[2].body;
+        assert!(caddy.contains(&format!("cp -p {CADDYFILE} {CADDYFILE_BACKUP}\n")));
+        assert!(caddy.contains(CADDY_BEGIN) && caddy.contains(CADDY_END));
+        assert!(caddy.contains(&format!("caddy validate --adapter caddyfile --config {CADDYFILE}")));
+        assert!(caddy.contains("systemctl reload caddy || restore"));
+        assert!(!caddy.contains("systemctl restart caddy"));
+        assert!(caddy.contains(&format!("cat {CADDYFILE_BACKUP} > {CADDYFILE}\n")));
         assert!(scripts[3].body.contains("curl -fsS -m 3 http://127.0.0.1:8080/healthz"));
         // Every script that touches the shell starts strict.
         for s in &scripts[..3] {
@@ -705,5 +922,147 @@ mod tests {
         assert_eq!(caddy_site_address("r.example.com", ""), "r.example.com");
         assert_eq!(caddy_site_address("r.example.com", "443"), "r.example.com");
         assert_eq!(caddy_site_address("r.example.com", " 8443 "), "r.example.com:8443");
+    }
+
+    #[test]
+    fn strip_program_names_the_same_fence_the_script_writes() {
+        assert!(CADDY_STRIP_AWK.contains(&format!("/^{CADDY_BEGIN}$/")));
+        assert!(CADDY_STRIP_AWK.contains(&format!("/^{CADDY_END}$/")));
+        // Single-quoted in the script: a quote inside would end it.
+        assert!(!CADDY_STRIP_AWK.contains('\''));
+    }
+
+    /// Run the strip program the way the Caddy step does, on a real
+    /// `awk`. Unix only: that is where the step runs.
+    #[cfg(unix)]
+    fn strip(input: &str) -> String {
+        strip_for("relay.example.com", input)
+    }
+
+    #[cfg(unix)]
+    fn strip_for(site: &str, input: &str) -> String {
+        use std::io::Write as _;
+        let mut child = std::process::Command::new("awk")
+            .arg("-v")
+            .arg(format!("site={site}"))
+            .arg(CADDY_STRIP_AWK)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("awk");
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rerun_replaces_the_managed_block_and_keeps_the_rest() {
+        let site = caddy_site("relay.example.com", 8080);
+        let first = format!(
+            "example.com {{\n    root * /srv\n}}\n\n{CADDY_BEGIN}\n{site}{CADDY_END}\n"
+        );
+        // What the step appends after stripping, as the script does.
+        let append = |base: &str, port: u16| {
+            format!("{base}\n{CADDY_BEGIN}\n{}{CADDY_END}\n", caddy_site("relay.example.com", port))
+        };
+        let stripped = strip(&first);
+        assert_eq!(stripped, "example.com {\n    root * /srv\n}\n");
+        let second = append(&stripped, 9090);
+        assert!(second.contains("reverse_proxy 127.0.0.1:9090"));
+        assert!(!second.contains("reverse_proxy 127.0.0.1:8080"));
+        // Converges: a third run on the second's output is identical,
+        // no blank line gained per deploy.
+        assert_eq!(append(&strip(&second), 9090), second);
+        // A file with no managed block passes through untouched, minus
+        // trailing blank lines.
+        assert_eq!(strip("a {\n}\n\n\n"), "a {\n}\n");
+    }
+
+    /// A Caddyfile a nightly deploy wrote before the fence existed: the
+    /// un-fenced block for THIS site goes (the fenced one replaces it),
+    /// and the same shape for another site, or a block of this site the
+    /// user edited, is theirs and stays.
+    #[cfg(unix)]
+    #[test]
+    fn the_legacy_unfenced_block_of_this_site_is_replaced() {
+        let legacy = format!(
+            "example.com {{\n    root * /srv\n}}\n\n{}",
+            caddy_site("relay.example.com", 8080)
+        );
+        assert_eq!(strip(&legacy), "example.com {\n    root * /srv\n}\n");
+        // Case-insensitive, like the site address itself.
+        assert_eq!(strip("Relay.Example.com {\n    reverse_proxy 127.0.0.1:1\n}\n"), "");
+        // Another site of the same shape is not ours.
+        let other = caddy_site("other.example.com", 8080);
+        assert_eq!(strip(&other), other);
+        // A block of this site with anything else inside is the user's,
+        // printed back line for line.
+        let edited = "relay.example.com {\n    reverse_proxy 127.0.0.1:8080\n    encode gzip\n}\n";
+        assert_eq!(strip(edited), edited);
+        let hand = "relay.example.com {\n    file_server\n}\n";
+        assert_eq!(strip(hand), hand);
+        // Legacy AND fenced together (a nightly deploy, then a fenced
+        // re-run that could not converge): both go.
+        let both = format!(
+            "{}\n{CADDY_BEGIN}\n{}{CADDY_END}\n",
+            caddy_site("relay.example.com", 8080),
+            caddy_site("relay.example.com", 9090)
+        );
+        assert_eq!(strip(&both), "");
+        // A port in the site address is part of the match.
+        let with_port = caddy_site("relay.example.com:8443", 8080);
+        assert_eq!(strip_for("relay.example.com:8443", &with_port), "");
+        assert_eq!(strip(&with_port), with_port);
+    }
+
+    #[test]
+    fn tls_endpoint_validates_domain_and_port() {
+        let ep = tls_endpoint(" https://Relay.Example.com/ ", "").unwrap();
+        assert_eq!(ep.site, "relay.example.com");
+        assert_eq!(ep.base_url, "https://relay.example.com");
+        let ep = tls_endpoint("relay.example.com", "8443").unwrap();
+        assert_eq!(ep.site, "relay.example.com:8443");
+        assert_eq!(ep.base_url, "https://relay.example.com:8443");
+        assert_eq!(tls_endpoint("relay.example.com", "443").unwrap().site, "relay.example.com");
+        let ep = tls_endpoint("2001:db8::1", "").unwrap();
+        assert_eq!(ep.site, "[2001:db8::1]");
+        assert_eq!(tls_endpoint("[2001:db8::1]", "8443").unwrap().base_url, "https://[2001:db8::1]:8443");
+        assert_eq!(tls_endpoint("203.0.113.9", "").unwrap().site, "203.0.113.9");
+        // Anything that would break out of the script or the site line.
+        let long = "a".repeat(64);
+        for bad in [
+            "relay.example.com'; rm -rf /",
+            "relay example.com",
+            "-relay.example.com",
+            "relay..example.com",
+            "relay.example.com{",
+            "a, relay.example.com",
+            long.as_str(),
+        ] {
+            assert_eq!(tls_endpoint(bad, ""), Err(EndpointError::BadDomain), "{bad}");
+        }
+        assert_eq!(tls_endpoint("  ", ""), Err(EndpointError::NoDomain));
+        for bad in ["abc", "0", "65536", "-1"] {
+            assert_eq!(tls_endpoint("relay.example.com", bad), Err(EndpointError::BadPort), "{bad}");
+        }
+    }
+
+    #[test]
+    fn http_endpoint_brackets_ipv6_and_binds_it() {
+        assert_eq!(http_endpoint("vps.example.com", 8080), Some(("http://vps.example.com:8080".into(), false)));
+        assert_eq!(http_endpoint("my_box", 8080), Some(("http://my_box:8080".into(), false)));
+        assert_eq!(http_endpoint("2001:db8::1", 8080), Some(("http://[2001:db8::1]:8080".into(), true)));
+        assert_eq!(http_endpoint("[2001:db8::1]", 8080), Some(("http://[2001:db8::1]:8080".into(), true)));
+        assert_eq!(http_endpoint("bad host", 8080), None);
+        let mut p = plan(false, Privilege::Root);
+        p.listen_v6 = true;
+        assert_eq!(p.bind(), "[::]");
+        assert!(p.scripts()[1].body.contains("--bind [::]"));
+        // TLS always binds loopback, whatever the host's address.
+        let mut p = plan(true, Privilege::Root);
+        p.listen_v6 = true;
+        assert_eq!(p.bind(), "127.0.0.1");
     }
 }

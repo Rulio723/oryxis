@@ -251,6 +251,12 @@ impl Oryxis {
                 }
             }
             SyncMessage::DeviceNameChanged(v) => {
+                // The same cap a peer applies when this name arrives,
+                // so what is typed here is what the other side shows.
+                let v: String = v
+                    .chars()
+                    .take(oryxis_sync::engine::DEVICE_NAME_MAX_CHARS)
+                    .collect();
                 self.sync.device_name = v.clone();
                 if let Some(vault) = &self.vault {
                     let _ = vault.set_setting("sync_device_name", &v);
@@ -287,37 +293,51 @@ impl Oryxis {
                 if w.open && w.token.is_empty() {
                     w.token = fresh_relay_token();
                 }
+                if !w.open {
+                    // The deploy block lives inside this card: folding it
+                    // away hides the deploy, and a session (or a run)
+                    // nobody can see must not outlive its surface, the
+                    // same rule as closing the deploy section itself.
+                    self.sync.relay_deploy.reset_probe();
+                }
             }
+            // The wizard's domain, public port and token are baked into
+            // a deploy plan; while a deploy probe or run is in flight
+            // they are frozen (the inputs are disabled, and refused here
+            // for the keyboard's sake), so nothing can move under a run.
             SyncMessage::WizardDomainChanged(v) => {
-                self.sync.relay_wizard.domain = v;
-                self.sync.relay_wizard.result = None;
-                // Editing the endpoint invalidates any in-flight probe:
-                // with the snapshot gone, its result is discarded on
-                // arrival instead of persisting a never-tested value.
-                self.sync.relay_wizard.testing_snapshot = None;
-                // The deploy plan bakes the domain into the Caddy site
-                // and the adopted URL, so it goes the same way.
-                self.sync.relay_deploy.reset_probe();
-                self.sync.relay_deploy.busy = false;
+                if !self.sync.relay_deploy.busy {
+                    self.sync.relay_wizard.domain = v;
+                    self.sync.relay_wizard.result = None;
+                    // Editing the endpoint invalidates any in-flight probe:
+                    // with the snapshot gone, its result is discarded on
+                    // arrival instead of persisting a never-tested value.
+                    self.sync.relay_wizard.testing_snapshot = None;
+                    // The deploy plan bakes the domain into the Caddy site
+                    // and the adopted URL, so it goes the same way.
+                    self.sync.relay_deploy.reset_probe();
+                }
             }
             SyncMessage::WizardPortChanged(v) => {
-                self.sync.relay_wizard.port = v;
-                self.sync.relay_wizard.result = None;
-                self.sync.relay_wizard.testing_snapshot = None;
-                self.sync.relay_deploy.reset_probe();
-                self.sync.relay_deploy.busy = false;
+                if !self.sync.relay_deploy.busy {
+                    self.sync.relay_wizard.port = v;
+                    self.sync.relay_wizard.result = None;
+                    self.sync.relay_wizard.testing_snapshot = None;
+                    self.sync.relay_deploy.reset_probe();
+                }
             }
             SyncMessage::WizardFormatChanged(f) => {
                 self.sync.relay_wizard.format = f;
             }
             SyncMessage::WizardRegenToken => {
-                self.sync.relay_wizard.token = fresh_relay_token();
-                self.sync.relay_wizard.result = None;
-                self.sync.relay_wizard.testing_snapshot = None;
-                // The plan carries the token it would write into the
-                // service; a fresh one needs a fresh plan.
-                self.sync.relay_deploy.reset_probe();
-                self.sync.relay_deploy.busy = false;
+                if !self.sync.relay_deploy.busy {
+                    self.sync.relay_wizard.token = fresh_relay_token();
+                    self.sync.relay_wizard.result = None;
+                    self.sync.relay_wizard.testing_snapshot = None;
+                    // The plan carries the token it would write into the
+                    // service; a fresh one needs a fresh plan.
+                    self.sync.relay_deploy.reset_probe();
+                }
             }
             SyncMessage::WizardTest => {
                 let Some(base) = self.sync.relay_wizard.base_url() else {
@@ -996,6 +1016,13 @@ impl Oryxis {
                         if let Some(vault) = &self.vault {
                             self.sync.peers =
                                 vault.list_sync_peers().unwrap_or_default();
+                        }
+                        // A pulled tombstone may have removed a cloud
+                        // account whose managed kubeconfig is still on
+                        // disk; this round does not pass through
+                        // `load_data_from_vault`, which sweeps the rest.
+                        if pulled > 0 {
+                            self.sweep_orphan_kubeconfigs();
                         }
                     }
                     SyncEvent::SyncFailed { error, .. } => {

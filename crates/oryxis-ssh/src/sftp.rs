@@ -2168,15 +2168,43 @@ impl SftpClient {
     /// the same SSH connection that hosts SFTP, so no extra auth round
     /// trip. Returns `(exit_code, stdout, stderr)`.
     pub async fn exec(&self, command: &str) -> Result<(u32, String, String), SshError> {
-        let handle = self.handle.lock().await;
-        let mut channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| SshError::Channel(format!("exec channel open: {e}")))?;
-        channel
-            .exec(true, command)
-            .await
-            .map_err(|e| SshError::Channel(format!("exec({command}): {e}")))?;
+        self.exec_inner(command, None).await
+    }
+
+    /// [`Self::exec`] with a bound on how long the command may run. A
+    /// command that outlives `limit` closes its channel on the way out
+    /// (the connection stays usable) and answers
+    /// [`SshError::ExecTimeout`], which a caller must read as "may
+    /// already have acted", never as a dead link to retry over.
+    pub async fn exec_timeout(
+        &self,
+        command: &str,
+        limit: std::time::Duration,
+    ) -> Result<(u32, String, String), SshError> {
+        self.exec_inner(command, Some(limit)).await
+    }
+
+    async fn exec_inner(
+        &self,
+        command: &str,
+        limit: Option<std::time::Duration>,
+    ) -> Result<(u32, String, String), SshError> {
+        // The handle lock covers the OPEN only: a channel is independent
+        // of the guard once granted, and holding it for the whole run
+        // would stall every other channel open on this connection behind
+        // one slow command.
+        let mut channel = {
+            let handle = self.handle.lock().await;
+            let channel = handle
+                .channel_open_session()
+                .await
+                .map_err(|e| SshError::Channel(format!("exec channel open: {e}")))?;
+            channel
+                .exec(true, command)
+                .await
+                .map_err(|e| SshError::Channel(format!("exec({command}): {e}")))?;
+            channel
+        };
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_code: Option<u32> = None;
@@ -2184,15 +2212,26 @@ impl SftpClient {
         // deliver `ExitStatus` *after* `Eof`, and breaking on Eof leaves
         // `exit_code` defaulted to 255, which is exactly the symptom we
         // hit on `cp -r` ("exit 255") even though the copy succeeded.
-        loop {
-            match channel.wait().await {
-                Some(ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
-                Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
-                    stderr.extend_from_slice(&data)
+        let collect = async {
+            loop {
+                match channel.wait().await {
+                    Some(ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
+                    Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
+                        stderr.extend_from_slice(&data)
+                    }
+                    Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = Some(exit_status),
+                    None => break,
+                    _ => {}
                 }
-                Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = Some(exit_status),
-                None => break,
-                _ => {}
+            }
+        };
+        match limit {
+            None => collect.await,
+            Some(limit) => {
+                if tokio::time::timeout(limit, collect).await.is_err() {
+                    let _ = channel.close().await;
+                    return Err(SshError::ExecTimeout(limit.as_secs()));
+                }
             }
         }
         Ok((

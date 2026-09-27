@@ -274,20 +274,7 @@ impl Oryxis {
                         entry.totp_secret = None;
                         entry.proxy_password = None;
                     }
-                    // The sync passphrase field is an edit buffer for the
-                    // shared group secret; a passphrase typed this session
-                    // must not sit in RAM behind the lock screen (the
-                    // stored value itself rides the encrypted setting).
-                    self.sync.passphrase_input.clear();
-                    self.sync.passphrase_matches = None;
-                    self.sync.passphrase_stored = None;
-                    self.sync.passphrase_editing = false;
-                    self.sync.passphrase_field_id = None;
-                    // Same for a round's armed key: a locked vault cannot
-                    // store it anyway (`set_sync_sftp_passphrase` needs
-                    // the master key), so the round that comes back
-                    // finds nothing to commit.
-                    self.sync.passphrase_sealed = None;
+                    self.sweep_sync_passphrase();
                     // Land the keyboard in the unlock field so the user
                     // returning to the machine just types the password.
                     return crate::widgets::focus_input(iced::widget::Id::new(
@@ -333,8 +320,14 @@ impl Oryxis {
                         // the lock severs every live connection, this
                         // one included, and a plan for a host that is
                         // no longer loaded has nothing to run against.
+                        // `reset_probe` also ABORTS a probe or run in
+                        // flight, so "severs" is true of a deploy too.
                         self.sync.relay_deploy.reset_probe();
-                        self.sync.relay_deploy.busy = false;
+                        // The same sweep the soft lock runs: the sync
+                        // passphrase edit (including the decrypted
+                        // stored value an open edit caches) must not
+                        // outlive the key behind the lock screen.
+                        self.sweep_sync_passphrase();
                         // Close live remote sessions, not just the panes
                         // referencing them, so locking the vault really
                         // severs the remote connections.
@@ -525,5 +518,22 @@ impl Oryxis {
             m => return crate::dispatch::unrouted(m),
         }
         Task::none()
+    }
+
+    /// Drop every trace of the sync group passphrase this session holds:
+    /// the edit buffer, the decrypted stored value an open edit caches
+    /// for its match hint, the edit mode itself, and a round's armed
+    /// key. Shared by BOTH locks, because each is a door behind which a
+    /// secret must not sit in RAM. The armed key goes too: a locked
+    /// vault cannot store it anyway (`set_sync_sftp_passphrase` needs
+    /// the master key), so the round that comes back finds nothing to
+    /// commit. The stored value itself rides the encrypted setting.
+    fn sweep_sync_passphrase(&mut self) {
+        self.sync.passphrase_input.clear();
+        self.sync.passphrase_matches = None;
+        self.sync.passphrase_stored = None;
+        self.sync.passphrase_editing = false;
+        self.sync.passphrase_field_id = None;
+        self.sync.passphrase_sealed = None;
     }
 }

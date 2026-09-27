@@ -66,44 +66,64 @@ impl Oryxis {
             .align_y(iced::Alignment::Center)
             .into()
         };
+        // Everything the plan is built from is frozen while a probe or
+        // run is in flight: disabled here and refused in the handlers.
+        // A frozen control still records its slot, as an INERT one
+        // (`RowAction::default()`: Enter does nothing): dropping it
+        // would renumber every row after it while the ring kept its
+        // index, and the next Enter would land on a different row.
+        let editable = !d.busy;
+        let inert = crate::keynav::RowAction::default;
+        let host_btn: Element<'_, Message> = button(trigger_inner)
+            .on_press_maybe(editable.then_some(Message::Sync(SyncMessage::DeployHostPickerOpen)))
+            .padding(10)
+            .width(300)
+            .style(|_, status| {
+                let c = OryxisColors::t();
+                let border = match status {
+                    BtnStatus::Hovered | BtnStatus::Pressed => c.accent_hover,
+                    _ => c.border,
+                };
+                button::Style {
+                    background: Some(Background::Color(c.bg_surface)),
+                    text_color: c.text_primary,
+                    border: Border { radius: Radius::from(8.0), width: 1.0, color: border },
+                    ..Default::default()
+                }
+            })
+            .into();
         let host_pick = self.settings_nav_slot_labeled(
             t("host"),
-            crate::keynav::RowAction::activate(Message::Sync(SyncMessage::DeployHostPickerOpen)),
+            if editable {
+                crate::keynav::RowAction::activate(Message::Sync(SyncMessage::DeployHostPickerOpen))
+            } else {
+                inert()
+            },
             8.0,
-            button(trigger_inner)
-                .on_press(Message::Sync(SyncMessage::DeployHostPickerOpen))
-                .padding(10)
-                .width(300)
-                .style(|_, status| {
-                    let c = OryxisColors::t();
-                    let border = match status {
-                        BtnStatus::Hovered | BtnStatus::Pressed => c.accent_hover,
-                        _ => c.border,
-                    };
-                    button::Style {
-                        background: Some(Background::Color(c.bg_surface)),
-                        text_color: c.text_primary,
-                        border: Border { radius: Radius::from(8.0), width: 1.0, color: border },
-                        ..Default::default()
-                    }
-                })
-                .into(),
+            host_btn,
         );
         col = col.push(panel_field(t("host"), host_pick)).push(Space::new().height(8));
 
         // Relay port.
+        let port_field: Element<'_, Message> = text_input("8080", &d.port)
+            .id(iced::widget::Id::new("set-sync-deploy-port"))
+            .on_input_maybe(
+                editable.then_some(|v| Message::Sync(SyncMessage::DeployPortChanged(v))),
+            )
+            .padding(8)
+            .width(120)
+            .style(crate::widgets::rounded_input_style)
+            .align_x(dir_align_x())
+            .into();
         let port_input = self.settings_nav_slot_labeled(
             t("relay_deploy_port"),
-            crate::keynav::RowAction::input(iced::widget::Id::new("set-sync-deploy-port")),
+            if editable {
+                crate::keynav::RowAction::input(iced::widget::Id::new("set-sync-deploy-port"))
+            } else {
+                inert()
+            },
             10.0,
-            text_input("8080", &d.port)
-                .id(iced::widget::Id::new("set-sync-deploy-port"))
-                .on_input(|v| Message::Sync(SyncMessage::DeployPortChanged(v)))
-                .padding(8)
-                .width(120)
-                .style(crate::widgets::rounded_input_style)
-                .align_x(dir_align_x())
-                .into(),
+            port_field,
         );
         col = col
             .push(panel_field(t("relay_deploy_port"), port_input))
@@ -111,11 +131,23 @@ impl Oryxis {
 
         // TLS via Caddy on the host.
         col = col
-            .push(self.nav_toggle_row(
-                t("relay_deploy_caddy"),
-                d.use_caddy,
-                Message::Sync(SyncMessage::DeployCaddyToggled),
-            ))
+            .push(if editable {
+                self.nav_toggle_row(
+                    t("relay_deploy_caddy"),
+                    d.use_caddy,
+                    Message::Sync(SyncMessage::DeployCaddyToggled),
+                )
+            } else {
+                // Shown, not offered: the handler refuses the toggle
+                // while busy, and the switch carries no message. Same
+                // slot `nav_toggle_row` records, inert.
+                self.settings_nav_slot_labeled(
+                    t("relay_deploy_caddy"),
+                    inert(),
+                    8.0,
+                    crate::widgets::toggle_row(t("relay_deploy_caddy"), d.use_caddy, Message::NoOp),
+                )
+            })
             .push(Space::new().height(4))
             .push(
                 text(if d.use_caddy {
@@ -129,31 +161,33 @@ impl Oryxis {
             .push(Space::new().height(12));
 
         // Actions: Check host, then Review & run or Copy script once a
-        // plan exists. Disabled buttons are not recorded, so keyboard
-        // Enter cannot double-fire a probe.
+        // plan exists. While busy they are disabled and their slots are
+        // inert, so keyboard Enter can neither double-fire a probe nor
+        // land on a renumbered row.
         let probe_msg = (!d.busy).then_some(Message::Sync(SyncMessage::DeployProbe));
         let probe_btn = styled_button_opt(t("relay_deploy_probe"), probe_msg.clone(), c.button_bg);
-        let probe_btn: Element<'_, Message> = match probe_msg {
-            Some(m) => self.settings_nav_slot(crate::keynav::RowAction::activate(m), 6.0, probe_btn),
-            None => probe_btn,
-        };
+        let probe_btn: Element<'_, Message> = self.settings_nav_slot(
+            probe_msg.map_or_else(inert, crate::keynav::RowAction::activate),
+            6.0,
+            probe_btn,
+        );
         let mut actions: Vec<Element<'_, Message>> = vec![probe_btn];
-        if let (Some(plan), Some(probe), false) = (&d.plan, &d.probe, d.busy) {
+        if let (Some(plan), Some(probe)) = (&d.plan, &d.probe) {
             actions.push(Space::new().width(8).into());
             if probe.privilege != Privilege::None {
-                let m = Message::Sync(SyncMessage::DeployReview);
+                let m = (!d.busy).then_some(Message::Sync(SyncMessage::DeployReview));
                 actions.push(self.settings_nav_slot(
-                    crate::keynav::RowAction::activate(m.clone()),
+                    m.clone().map_or_else(inert, crate::keynav::RowAction::activate),
                     6.0,
-                    styled_button(t("relay_deploy_review"), m, c.accent),
+                    styled_button_opt(t("relay_deploy_review"), m, c.accent),
                 ));
                 actions.push(Space::new().width(8).into());
             }
-            let copy = Message::CopyToClipboard(plan.consent_script());
+            let copy = (!d.busy).then(|| Message::CopyToClipboard(plan.consent_script()));
             actions.push(self.settings_nav_slot(
-                crate::keynav::RowAction::activate(copy.clone()),
+                copy.clone().map_or_else(inert, crate::keynav::RowAction::activate),
                 6.0,
-                styled_button(t("relay_deploy_copy_script"), copy, c.button_bg),
+                styled_button_opt(t("relay_deploy_copy_script"), copy, c.button_bg),
             ));
         }
         col = col.push(dir_row(actions).align_y(iced::Alignment::Center));

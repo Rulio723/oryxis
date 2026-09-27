@@ -1341,6 +1341,26 @@ impl Oryxis {
         )
     }
 
+    /// One of the wizard's text inputs, recorded on the Settings ring
+    /// only while it can take input: a deploy in flight disables them,
+    /// and a disabled input is not a stop of the walk (the same rule as
+    /// disabled buttons).
+    fn wizard_input_slot<'a>(
+        &self,
+        id: &'static str,
+        input: Element<'a, Message>,
+    ) -> Element<'a, Message> {
+        // Frozen while a deploy is in flight, but still a stop of the
+        // walk (inert): an omitted slot would renumber every row below
+        // it under a ring that kept its index.
+        let action = if self.sync.relay_deploy.busy {
+            crate::keynav::RowAction::default()
+        } else {
+            crate::keynav::RowAction::input(iced::widget::Id::new(id))
+        };
+        self.settings_nav_slot(action, 10.0, input)
+    }
+
     /// "Set up your own relay" wizard: generates ready-to-paste
     /// server files for the self-hosted oryxis-relay and adopts
     /// the endpoint (signaling URL + token settings) once the
@@ -1348,6 +1368,9 @@ impl Oryxis {
     /// SELF_HOSTING.md documents long-form.
     fn sync_relay_wizard_card(&self) -> iced::widget::Column<'_, Message> {
         let w = &self.sync.relay_wizard;
+        // A deploy probe or run bakes the domain, public port and token
+        // into its plan: they are frozen while one is in flight.
+        let deploy_busy = self.sync.relay_deploy.busy;
         let mut wizard_col: iced::widget::Column<'_, Message> =
             column![self.settings_nav_slot_labeled(
                 t("sync_wizard_button"),
@@ -1374,14 +1397,14 @@ impl Oryxis {
                         .color(OryxisColors::t().text_muted),
                 )
                 .push(Space::new().height(4))
-                .push(self.settings_nav_slot(
-                    crate::keynav::RowAction::input(iced::widget::Id::new(
-                        "set-sync-wizard-domain",
-                    )),
-                    10.0,
+                .push(self.wizard_input_slot(
+                    "set-sync-wizard-domain",
                     text_input("relay.example.com", &w.domain)
                         .id(iced::widget::Id::new("set-sync-wizard-domain"))
-                        .on_input(|v| Message::Sync(SyncMessage::WizardDomainChanged(v)))
+                        .on_input_maybe(
+                            (!deploy_busy)
+                                .then_some(|v| Message::Sync(SyncMessage::WizardDomainChanged(v))),
+                        )
                         .padding(8)
                         .width(320)
                         .style(crate::widgets::rounded_input_style)
@@ -1395,14 +1418,14 @@ impl Oryxis {
                         .color(OryxisColors::t().text_muted),
                 )
                 .push(Space::new().height(4))
-                .push(self.settings_nav_slot(
-                    crate::keynav::RowAction::input(iced::widget::Id::new(
-                        "set-sync-wizard-port",
-                    )),
-                    10.0,
+                .push(self.wizard_input_slot(
+                    "set-sync-wizard-port",
                     text_input("443", &w.port)
                         .id(iced::widget::Id::new("set-sync-wizard-port"))
-                        .on_input(|v| Message::Sync(SyncMessage::WizardPortChanged(v)))
+                        .on_input_maybe(
+                            (!deploy_busy)
+                                .then_some(|v| Message::Sync(SyncMessage::WizardPortChanged(v))),
+                        )
                         .padding(8)
                         .width(120)
                         .style(crate::widgets::rounded_input_style)
@@ -1420,17 +1443,31 @@ impl Oryxis {
                     .color(OryxisColors::t().text_muted),
                 )
                 .push(Space::new().height(6))
-                .push(self.settings_nav_slot(
-                    crate::keynav::RowAction::activate(
-                        Message::Sync(SyncMessage::WizardRegenToken),
-                    ),
-                    6.0,
-                    styled_button(
-                        crate::i18n::t("sync_wizard_regen"),
-                        Message::Sync(SyncMessage::WizardRegenToken),
-                        OryxisColors::t().button_bg,
-                    ),
-                ));
+                .push(if deploy_busy {
+                    // Disabled, and an inert stop of the walk so the
+                    // rows below keep their indices.
+                    self.settings_nav_slot(
+                        crate::keynav::RowAction::default(),
+                        6.0,
+                        styled_button_opt(
+                            crate::i18n::t("sync_wizard_regen"),
+                            None,
+                            OryxisColors::t().button_bg,
+                        ),
+                    )
+                } else {
+                    self.settings_nav_slot(
+                        crate::keynav::RowAction::activate(
+                            Message::Sync(SyncMessage::WizardRegenToken),
+                        ),
+                        6.0,
+                        styled_button(
+                            crate::i18n::t("sync_wizard_regen"),
+                            Message::Sync(SyncMessage::WizardRegenToken),
+                            OryxisColors::t().button_bg,
+                        ),
+                    )
+                });
             // Artifact format selector: three plain buttons (the
             // labels are proper nouns, identical in every locale),
             // accent marks the selected one.
