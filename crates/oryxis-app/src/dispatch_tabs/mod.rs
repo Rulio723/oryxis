@@ -182,6 +182,7 @@ impl Oryxis {
                 | TabsMessage::ShowTreeHostMenu(..)
                 | TabsMessage::HideCardMenu
                 | TabsMessage::RunHotkeyAction(..)
+                | TabsMessage::RunHotkeyActionRepeated(..)
                 | TabsMessage::OpenSettingsSection(..)
                 | TabsMessage::FocusViewSearch
             ) => self.handle_tabs_menus(m),

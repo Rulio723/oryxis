@@ -71,6 +71,17 @@ impl Oryxis {
                     crate::hotkeys::FamilyMatch::Plain,
                 );
             }
+            TabsMessage::RunHotkeyActionRepeated(action, times) => {
+                // Bounded: a runaway count from a driver reporting a huge
+                // magnification must not freeze the loop. The font clamp
+                // makes anything past a few dozen steps a no-op anyway.
+                let tasks: Vec<Task<Message>> = (0..times.min(64))
+                    .map(|_| {
+                        self.dispatch_hotkey_action(action, crate::hotkeys::FamilyMatch::Plain)
+                    })
+                    .collect();
+                return Task::batch(tasks);
+            }
             TabsMessage::OpenSettingsSection(section) => {
                 // Switch to Settings AND select the section:
                 // ChangeSettingsSection alone assumes the view is open.

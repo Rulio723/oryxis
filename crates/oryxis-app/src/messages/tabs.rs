@@ -80,6 +80,10 @@ pub enum TabsMessage {
     /// Replay a hotkey action from a palette row (reuses the per-action
     /// context gating in `dispatch_hotkey_action`).
     RunHotkeyAction(crate::hotkeys::HotkeyAction),
+    /// The same action `n` times in a row: one touchpad pinch event can
+    /// complete several zoom steps, and the canvas publishes one message
+    /// per event.
+    RunHotkeyActionRepeated(crate::hotkeys::HotkeyAction, u32),
     /// Navigate to a Settings section from anywhere: switches to the
     /// Settings view AND selects the section (`ChangeSettingsSection`
     /// alone only sets the section, assuming the view is already open).

@@ -362,6 +362,11 @@ pub struct Oryxis {
     /// strip entry at restore time and TAKEN by the boot / unlock site
     /// that lands, so a later unlock (a soft lock) finds nothing.
     pub(crate) launch_landing: Option<crate::state::TabRef>,
+    /// The landing tab when its dial had to wait for the local terminal
+    /// scan: the launch queue selects it once it dials it, because
+    /// selecting a dormant tab earlier runs the foreground reopen, which
+    /// would resolve the terminal against a list that does not exist yet.
+    pub(crate) launch_landing_deferred: Option<uuid::Uuid>,
     /// Whether the ZMODEM staging sweep (`zmodem_sweep_task`) has run
     /// in this process.
     pub(crate) zmodem_swept: bool,

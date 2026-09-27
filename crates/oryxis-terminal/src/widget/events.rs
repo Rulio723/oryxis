@@ -1608,11 +1608,12 @@ where
     ///
     /// `None` when the chord is unbound: nothing else reads a pinch
     /// today, and declining leaves the input for whatever might later.
-    /// A move takes at most one step and carries the rest
-    /// ([`pinch_step`]); the phase events are consumed and reset the
-    /// residual (the end first paying out one step still owed), so no
-    /// fraction of one gesture leaks into the next. A move that only
-    /// grew the residual is consumed too, the input was spoken for.
+    /// A move pays every whole step it completed and carries the
+    /// fraction ([`pinch_step`]); the count rides `MouseInput::Pinch`,
+    /// and a widget gesture runs once per step. The phase events are
+    /// consumed and reset the residual, so no fraction of one gesture
+    /// leaks into the next. A move that only grew the residual is
+    /// consumed too, the input was spoken for.
     fn on_pinch(
         &self,
         widget_state: &mut TerminalWidgetState,
@@ -1621,23 +1622,31 @@ where
     ) -> Option<CanvasAction<Message>> {
         let resolver = self.mouse_bindings.as_ref()?;
         let prev = widget_state.pinch_residual.get();
-        let (direction, residual) = match phase {
+        // Every whole step a move completes is paid in that move, so the
+        // end of a gesture only drops a fraction, and a start clears one
+        // left from a gesture whose end never arrived: nothing leaks into
+        // the next pinch.
+        let (due, residual) = match phase {
             mouse::GesturePhase::Moved => pinch_step(prev, delta, Self::PINCH_STEP),
-            // The end of a gesture pays out one whole step still owed
-            // (a burst the moves could only answer one step at a time)
-            // and drops the rest, so nothing leaks into the next pinch.
-            // A start only clears.
-            mouse::GesturePhase::Ended => {
-                let (direction, _) = pinch_step(prev, 0.0, Self::PINCH_STEP);
-                (direction, 0.0)
-            }
             _ => (None, 0.0),
         };
         widget_state.pinch_residual.set(residual);
-        let Some(direction) = direction else {
+        let Some((direction, steps)) = due else {
             return Some(CanvasAction::capture());
         };
-        let gesture = resolver(MouseInput::Pinch(direction), &widget_state.modifiers)?;
+        let gesture = resolver(MouseInput::Pinch(direction, steps), &widget_state.modifiers)?;
+        // A widget gesture has no count of its own, so a scroll runs
+        // once per step; every other widget gesture (copy, paste, select
+        // all) runs once, because repeating it would repeat its effect.
+        // A published action carries the count in its message.
+        if let MouseGesture::Widget(
+            action @ (TerminalChordAction::ScrollPageUp | TerminalChordAction::ScrollPageDown),
+        ) = &gesture
+        {
+            for _ in 1..steps {
+                let _ = self.perform_chord_action(*action, widget_state);
+            }
+        }
         self.perform_mouse_gesture(gesture, widget_state)
     }
 
@@ -1850,29 +1859,29 @@ where
     }
 }
 
-/// One touchpad pinch move against the carried remainder: the direction
-/// of the step to take now, if a whole one is due, and what to carry.
+/// One touchpad pinch move against the carried remainder: the whole
+/// steps due now (direction and count), if any, and the fraction to
+/// carry into the next move.
 ///
-/// ONE step per call, whatever the burst: a canvas action publishes a
-/// single message, so a move worth three steps takes one and carries the
-/// other two into the next move rather than discarding them (the next
-/// move, or the gesture's end, pays them out). Same reversal rule as
-/// `whole_notches`: a pinch that changes direction responds at once
-/// instead of paying off the stale remainder first.
-fn pinch_step(prev: f32, delta: f32, step: f32) -> (Option<PinchDirection>, f32) {
+/// EVERY whole step a move crossed is paid at once: the resolver hands
+/// the count to the binding (the app replays the action that many
+/// times), so a fast pinch zooms as far as the fingers travelled and the
+/// gesture's end has nothing left to drop but a fraction. Same reversal
+/// rule as `whole_notches`: a pinch that changes direction responds at
+/// once instead of paying off the stale remainder first.
+fn pinch_step(prev: f32, delta: f32, step: f32) -> (Option<(PinchDirection, u32)>, f32) {
     let acc = if prev != 0.0 && delta != 0.0 && prev.signum() != delta.signum() {
         delta
     } else {
         prev + delta
     };
-    if acc.abs() < step {
+    let whole = (acc.abs() / step).floor();
+    if whole < 1.0 {
         return (None, acc);
     }
-    if acc > 0.0 {
-        (Some(PinchDirection::Out), acc - step)
-    } else {
-        (Some(PinchDirection::In), acc + step)
-    }
+    let rest = acc - acc.signum() * whole * step;
+    let direction = if acc > 0.0 { PinchDirection::Out } else { PinchDirection::In };
+    (Some((direction, whole as u32)), rest)
 }
 
 #[cfg(test)]
@@ -1887,28 +1896,24 @@ mod pinch_tests {
         assert_eq!(d, None);
         assert!((r - 0.04).abs() < 1e-6);
         let (d, r) = pinch_step(r, 0.07, STEP);
-        assert_eq!(d, Some(PinchDirection::Out));
+        assert_eq!(d, Some((PinchDirection::Out, 1)));
         assert!((r - 0.01).abs() < 1e-6);
     }
 
     #[test]
-    fn a_burst_takes_one_step_and_carries_the_rest() {
+    fn a_burst_pays_every_whole_step_at_once() {
         let (d, r) = pinch_step(0.0, 0.35, STEP);
-        assert_eq!(d, Some(PinchDirection::Out));
-        assert!((r - 0.25).abs() < 1e-6);
-        // The following moves pay the carried steps out one by one.
-        let (d, r) = pinch_step(r, 0.0, STEP);
-        assert_eq!(d, Some(PinchDirection::Out));
-        let (d, r) = pinch_step(r, 0.0, STEP);
-        assert_eq!(d, Some(PinchDirection::Out));
-        let (d, _) = pinch_step(r, 0.0, STEP);
-        assert_eq!(d, None);
+        assert_eq!(d, Some((PinchDirection::Out, 3)));
+        assert!((r - 0.05).abs() < 1e-6);
+        let (d, r) = pinch_step(0.0, -0.21, STEP);
+        assert_eq!(d, Some((PinchDirection::In, 2)));
+        assert!((r + 0.01).abs() < 1e-6);
     }
 
     #[test]
     fn a_reversal_drops_the_stale_remainder() {
         let (d, r) = pinch_step(0.25, -0.12, STEP);
-        assert_eq!(d, Some(PinchDirection::In));
+        assert_eq!(d, Some((PinchDirection::In, 1)));
         assert!((r + 0.02).abs() < 1e-6);
     }
 }

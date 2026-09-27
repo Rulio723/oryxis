@@ -522,6 +522,13 @@ impl Oryxis {
             })
             .collect();
         Box::new(move |input, mods| {
+            // A pinch event reports every whole step it completed; the
+            // action runs that many times (below), so a fast pinch zooms
+            // as far as the fingers travelled.
+            let repeat = match input {
+                MouseInput::Pinch(_, steps) => steps.max(1),
+                _ => 1,
+            };
             let action = match input {
                 MouseInput::Button(button) => {
                     let button = MouseButton::from_iced(button)?;
@@ -555,7 +562,7 @@ impl Oryxis {
                 // SYNTHESIZED, exactly Ctrl and nothing held: a hand
                 // resting on Shift or Cmd while pinching must still
                 // land on the chord, and matching is modifier-exact.
-                MouseInput::Pinch(direction) => {
+                MouseInput::Pinch(direction, _) => {
                     let direction = match direction {
                         oryxis_terminal::widget::PinchDirection::Out => WheelDirection::Up,
                         oryxis_terminal::widget::PinchDirection::In => WheelDirection::Down,
@@ -583,6 +590,16 @@ impl Oryxis {
                 }
                 HotkeyAction::ScrollbackPageDown => {
                     MouseGesture::Widget(TerminalChordAction::ScrollPageDown)
+                }
+                // Only a zoom step is worth repeating: a pinch rebound to
+                // anything else (a paste, a close) must run once, however
+                // far the fingers travelled.
+                other @ (HotkeyAction::FontZoomIn | HotkeyAction::FontZoomOut)
+                    if repeat > 1 =>
+                {
+                    MouseGesture::Publish(Message::Tabs(
+                        crate::messages::TabsMessage::RunHotkeyActionRepeated(other, repeat),
+                    ))
                 }
                 other => MouseGesture::Publish(Message::Tabs(
                     crate::messages::TabsMessage::RunHotkeyAction(other),

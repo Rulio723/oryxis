@@ -403,6 +403,7 @@ impl Oryxis {
                         // nobody took.
                         self.launch_dials.clear();
                         self.launch_landing = None;
+                        self.launch_landing_deferred = None;
                         // A batch connect still in progress goes the same
                         // way: the next unlock must not resume dialling a
                         // list the user picked before locking.

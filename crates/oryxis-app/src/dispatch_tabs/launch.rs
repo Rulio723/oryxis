@@ -66,13 +66,31 @@ impl Oryxis {
             if self.local_terminals_scanning {
                 return None;
             }
+            // Raised HERE, not when the message lands: the funnel runs
+            // after every update, and each one before the rescan is
+            // handled would otherwise ask for another scan.
+            self.local_terminals_scanning = true;
             return Some(Task::done(Message::Settings(
                 crate::app::SettingsMessage::RescanLocalTerminals,
             )));
         }
         while let Some(id) = self.launch_dials.pop_front() {
-            if let Some(task) = self.dial_dormant_in_place(id) {
-                return Some(task);
+            let dial = self.dial_dormant_in_place(id);
+            // A landing that waited for the terminal scan lands now,
+            // after its dial, whether or not the dial could start (a tab
+            // closed meanwhile simply has nothing to select).
+            let landing = (self.launch_landing_deferred == Some(id))
+                .then(|| {
+                    self.launch_landing_deferred = None;
+                    self.tabs.iter().position(|t| t._id == id)
+                })
+                .flatten()
+                .map(|idx| Task::done(Message::Tabs(TabsMessage::SelectTab(idx))));
+            match (dial, landing) {
+                (Some(dial), Some(select)) => return Some(Task::batch([dial, select])),
+                (Some(dial), None) => return Some(dial),
+                (None, Some(select)) => return Some(select),
+                (None, None) => {}
             }
         }
         None
@@ -228,11 +246,15 @@ impl Oryxis {
                     if self.local_terminals.is_none() && self.queued_tab_needs_terminal_list(id) {
                         // Its terminal list is not there yet: first in
                         // line instead, dialled by the funnel once the
-                        // scan it starts has answered.
+                        // scan it starts has answered, and SELECTED
+                        // then too. Selecting a dormant tab now would
+                        // run the foreground reopen against the missing
+                        // list and fail it.
                         self.launch_dials.push_front(id);
-                    } else {
-                        out.dial = self.dial_dormant_in_place(id);
+                        self.launch_landing_deferred = Some(id);
+                        return out;
                     }
+                    out.dial = self.dial_dormant_in_place(id);
                 }
                 out.select = self
                     .tabs

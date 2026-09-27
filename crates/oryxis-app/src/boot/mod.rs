@@ -344,6 +344,7 @@ impl Oryxis {
                 launch_dials: std::collections::VecDeque::new(),
                 batch_dials: std::collections::VecDeque::new(),
                 launch_landing: None,
+                launch_landing_deferred: None,
                 zmodem_swept: false,
                 pending_tab_placement: None,
                 pending_pane_split: None,
@@ -923,6 +924,9 @@ impl Oryxis {
                 c.protocol == oryxis_core::models::connection::ConnectionProtocol::Local
             })
         {
+            // Marked in flight now, so the launch queue's first turn
+            // waits on this scan instead of asking for a second one.
+            app.local_terminals_scanning = true;
             tasks.push(Task::done(Message::Settings(
                 crate::app::SettingsMessage::RescanLocalTerminals,
             )));

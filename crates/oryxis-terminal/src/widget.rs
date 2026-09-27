@@ -503,7 +503,9 @@ pub enum PinchDirection {
 }
 
 /// What a mouse binding is matched against: a button press, one wheel
-/// notch in a direction, or one whole step of a touchpad pinch.
+/// notch in a direction, or the whole steps a touchpad pinch event
+/// completed (`Pinch(direction, steps)`, `steps >= 1`): a fast pinch can
+/// cross several in one event, and the gesture owes every one of them.
 ///
 /// The three are one resolver rather than three because they are one
 /// model on the app side (a wheel chord is a `PrimaryKey` like a
@@ -514,7 +516,7 @@ pub enum PinchDirection {
 pub enum MouseInput {
     Button(mouse::Button),
     Wheel(WheelDirection),
-    Pinch(PinchDirection),
+    Pinch(PinchDirection, u32),
 }
 
 /// Resolves a mouse press or wheel notch to a [`MouseGesture`], or
