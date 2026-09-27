@@ -185,12 +185,19 @@ impl Oryxis {
                             // The restored strip's landing (issue #229),
                             // TAKEN here whatever wins below, so a later
                             // unlock (a soft lock's) finds nothing to
-                            // land on. Under "connect at launch" taking
-                            // it also dials the landing tab first, which
-                            // is right even when a launch argument
-                            // decides where the app opens: the tab was
-                            // queued either way.
-                            let landing = self.take_launch_landing_task();
+                            // land on. A launch argument outranks it
+                            // entirely (no select AND no dial: the
+                            // argument dials in the foreground, and two
+                            // dials at once would share the prompt
+                            // slots); otherwise its dial runs now and
+                            // its select is the last branch below.
+                            let outranked = self
+                                .pending_auto_connect
+                                .is_some_and(|id| self.connections.iter().any(|c| c.id == id))
+                                || self.pending_deep_link.is_some()
+                                || self.pending_connect_target.is_some();
+                            let landing = self.take_launch_landing_task(outranked);
+                            unlock_tasks.extend(landing.dial);
                             // The ZMODEM staging sweep, once, now that the
                             // download folder setting is known.
                             unlock_tasks.extend(self.zmodem_sweep_task());
@@ -215,7 +222,7 @@ impl Oryxis {
                                 // known_hosts are readable.
                                 let route = self.handle_connect_target(&target);
                                 unlock_tasks.push(route);
-                            } else if let Some(landing) = landing {
+                            } else if let Some(landing) = landing.select {
                                 // Below every launch argument: an
                                 // argument says where to open, the
                                 // landing only says where the user was.

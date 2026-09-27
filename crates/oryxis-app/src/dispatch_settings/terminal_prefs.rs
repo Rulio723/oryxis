@@ -82,6 +82,7 @@ impl Oryxis {
             }
             SettingsMessage::TerminalFontSizeIncrease => {
                 self.terminal_font_size = (self.terminal_font_size + 1.0).min(24.0);
+                self.normalize_terminal_font_zoom();
                 self.persist_setting(
                     "terminal_font_size",
                     &format!("{}", self.terminal_font_size),
@@ -89,6 +90,7 @@ impl Oryxis {
             }
             SettingsMessage::TerminalFontSizeDecrease => {
                 self.terminal_font_size = (self.terminal_font_size - 1.0).max(10.0);
+                self.normalize_terminal_font_zoom();
                 self.persist_setting(
                     "terminal_font_size",
                     &format!("{}", self.terminal_font_size),
@@ -612,5 +614,44 @@ impl Oryxis {
     /// a delta over it rather than a rewrite of it.
     pub(crate) fn reset_terminal_font_zoom(&mut self) {
         self.terminal_font_zoom = 0.0;
+    }
+
+    /// Re-anchor the zoom after the preference moved, so it keeps
+    /// describing what is drawn. Without it a delta the clamp was
+    /// already cutting (preference raised under a zoom) keeps being cut
+    /// by the next stepper edit too, and a step down changes nothing on
+    /// screen: the control reads as dead while the hint under it still
+    /// names the old size.
+    pub(crate) fn normalize_terminal_font_zoom(&mut self) {
+        self.terminal_font_zoom =
+            normalized_font_zoom(self.terminal_font_size, self.terminal_font_zoom);
+    }
+}
+
+/// The zoom that draws the same size as `pref + zoom` would once
+/// clamped, expressed as a delta the clamp no longer has to cut.
+fn normalized_font_zoom(pref: f32, zoom: f32) -> f32 {
+    (pref + zoom).clamp(Oryxis::TERMINAL_FONT_MIN, Oryxis::TERMINAL_FONT_MAX) - pref
+}
+
+#[cfg(test)]
+mod font_zoom_tests {
+    use super::normalized_font_zoom;
+
+    #[test]
+    fn a_zoom_inside_the_range_is_left_alone() {
+        assert_eq!(normalized_font_zoom(14.0, 4.0), 4.0);
+        assert_eq!(normalized_font_zoom(14.0, -3.0), -3.0);
+    }
+
+    #[test]
+    fn a_zoom_the_clamp_was_cutting_is_trimmed_to_what_is_drawn() {
+        // Zoomed to the maximum at 14 pt, then the preference raised to
+        // 20: the drawn size is 24, so the delta becomes 4 and a step
+        // back down to 19 visibly shrinks the text.
+        let zoom = normalized_font_zoom(20.0, 10.0);
+        assert_eq!(zoom, 4.0);
+        assert_eq!((19.0 + zoom).clamp(10.0, 24.0), 23.0);
+        assert_eq!(normalized_font_zoom(11.0, -4.0), -1.0);
     }
 }

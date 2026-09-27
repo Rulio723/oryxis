@@ -240,6 +240,24 @@ impl Oryxis {
     /// Home leaves it, and the tab they came from is the honest answer
     /// to "where were you".
     pub(crate) fn active_strip_ref(&self) -> Option<crate::state::ActiveTabRef> {
+        let target = self.active_strip_target()?;
+        let key = self.strip_ref_key(&target)?;
+        let mut nth = 0;
+        for r in &self.tab_order {
+            if *r == target {
+                return Some(crate::state::ActiveTabRef { key, nth });
+            }
+            if self.strip_ref_key(r).as_deref() == Some(key.as_str()) {
+                nth += 1;
+            }
+        }
+        None
+    }
+
+    /// The strip entry [`Self::active_strip_ref`] describes, before it is
+    /// named: cheap (no spec is built), which is what lets the
+    /// per-update signature hash it instead of the full reference.
+    fn active_strip_target(&self) -> Option<crate::state::TabRef> {
         let target = match self.active_view {
             crate::state::View::Terminal => {
                 crate::state::TabRef::Terminal(self.tabs.get(self.active_tab?)?._id)
@@ -253,17 +271,7 @@ impl Oryxis {
                 .find(|r| !matches!(r, crate::state::TabRef::Panel(_)))?,
             _ => return None,
         };
-        let key = self.strip_ref_key(&target)?;
-        let mut nth = 0;
-        for r in &self.tab_order {
-            if *r == target {
-                return Some(crate::state::ActiveTabRef { key, nth });
-            }
-            if self.strip_ref_key(r).as_deref() == Some(key.as_str()) {
-                nth += 1;
-            }
-        }
-        None
+        Some(target)
     }
 
     /// The spec key a strip entry restores under, if it restores at
@@ -334,22 +342,33 @@ impl Oryxis {
         if !self.prefs.restore_tabs_on_launch || crate::app::AUTO_PASSWORD.get().is_some() {
             return;
         }
+        // One pass over each list, not a search per strip entry: this
+        // runs after EVERY update, output batches included, so it must
+        // stay linear in the number of tabs.
+        let pinned_ids: std::collections::HashSet<uuid::Uuid> = self
+            .tabs
+            .iter()
+            .filter(|t| t.pinned)
+            .map(|t| t._id)
+            .chain(self.sftp_tabs.iter().filter(|t| t.pinned).map(|t| t.id))
+            .collect();
         let mut h = DefaultHasher::new();
         for r in &self.tab_order {
             r.strip_id().hash(&mut h);
             let pinned = match r {
-                crate::state::TabRef::Terminal(id) => {
-                    self.tabs.iter().any(|t| t._id == *id && t.pinned)
-                }
-                crate::state::TabRef::Sftp(id) => {
-                    self.sftp_tabs.iter().any(|t| t.id == *id && t.pinned)
+                crate::state::TabRef::Terminal(id) | crate::state::TabRef::Sftp(id) => {
+                    pinned_ids.contains(id)
                 }
                 crate::state::TabRef::Panel(_) => false,
             };
             pinned.hash(&mut h);
         }
+        // The active chip by identity, not by its spec key and ordinal:
+        // the strip itself is already in the hash, so which entry is
+        // active is all that can still move the reference, and naming
+        // it builds no spec. The key is computed on the write only.
         if self.prefs.restore_last_active_tab {
-            self.active_strip_ref().hash(&mut h);
+            self.active_strip_target().map(|r| r.strip_id()).hash(&mut h);
         }
         let signature = h.finish();
         if signature == self.open_tabs_signature {
@@ -420,10 +439,11 @@ impl Oryxis {
                 self.tab_order.push(crate::state::TabRef::Sftp(tab.id));
                 self.sftp_tabs.push(tab);
             } else {
+                let queued = self.launch_dials_wanted() && self.has_in_place_dial(&spec);
                 let tab = crate::state::TerminalTab::new_dormant(
                     label,
                     spec,
-                    if self.launch_dials_wanted() {
+                    if queued {
                         "restored_tab_queued_hint"
                     } else {
                         "restored_tab_dormant_hint"
@@ -457,11 +477,7 @@ impl Oryxis {
                 .filter(|id| {
                     self.tabs.iter().any(|t| {
                         t._id == *id
-                            && matches!(
-                                t.pending_reopen,
-                                Some(crate::state::PinnedTabSpec::Host { .. })
-                                    | Some(crate::state::PinnedTabSpec::LocalShell { .. })
-                            )
+                            && t.pending_reopen.as_ref().is_some_and(|s| self.has_in_place_dial(s))
                     })
                 })
                 .collect();
@@ -532,7 +548,10 @@ impl Oryxis {
                 // The queue is seeded once, on the FIRST restore of the
                 // process; a pin recreated by a later re-run is not in
                 // it and connects on select like it always did.
-                let hint = if !self.open_tabs_restored && self.launch_dials_wanted() {
+                let hint = if !self.open_tabs_restored
+                    && self.launch_dials_wanted()
+                    && self.has_in_place_dial(&spec)
+                {
                     "restored_tab_queued_hint"
                 } else {
                     "pinned_tab_dormant_hint"
@@ -546,5 +565,66 @@ impl Oryxis {
         // default view (Hosts). We deliberately do not focus a pinned tab or
         // switch to the terminal: opening always lands on Hosts, and a
         // dormant tab only connects on an explicit select.
+    }
+}
+
+impl Oryxis {
+    /// [`spec_has_in_place_dial`], plus the one thing the spec cannot
+    /// say: a saved host edited into a remote desktop since the snapshot
+    /// is refused by `dial_dormant_in_place`, so its chip must not
+    /// promise a dial either.
+    fn has_in_place_dial(&self, spec: &crate::state::PinnedTabSpec) -> bool {
+        if let crate::state::PinnedTabSpec::Host { id, .. } = spec
+            && self.connections.iter().any(|c| {
+                c.id == *id
+                    && c.protocol
+                        == oryxis_core::models::connection::ConnectionProtocol::RemoteDesktop
+            })
+        {
+            return false;
+        }
+        spec_has_in_place_dial(spec)
+    }
+}
+
+/// Whether a restored spec is one the "connect at launch" queue dials
+/// (a saved host, a local shell). The queue and the hint a chip shows
+/// both ask this, so a cloud or SFTP chip, which keeps connecting on
+/// select, never promises a dial that is not coming.
+fn spec_has_in_place_dial(spec: &crate::state::PinnedTabSpec) -> bool {
+    matches!(
+        spec,
+        crate::state::PinnedTabSpec::Host { .. } | crate::state::PinnedTabSpec::LocalShell { .. }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spec_has_in_place_dial;
+    use crate::state::{PinnedTabSpec, SftpPaneSpec};
+
+    #[test]
+    fn only_hosts_and_local_shells_are_dialled_at_launch() {
+        let id = uuid::Uuid::new_v4();
+        assert!(spec_has_in_place_dial(&PinnedTabSpec::Host { id, label: "h".into() }));
+        assert!(spec_has_in_place_dial(&PinnedTabSpec::LocalShell {
+            program: "bash".into(),
+            args: vec![],
+            label: "sh".into(),
+        }));
+        // These keep connecting on select, so their chips must not wear
+        // the "connecting at launch" hint.
+        assert!(!spec_has_in_place_dial(&PinnedTabSpec::KubectlExec {
+            group_id: id,
+            namespace: "ns".into(),
+            pod: "p".into(),
+            container: "c".into(),
+            label: "k".into(),
+        }));
+        assert!(!spec_has_in_place_dial(&PinnedTabSpec::Sftp {
+            left: SftpPaneSpec::Local,
+            right: SftpPaneSpec::Remote(id),
+            label: "s".into(),
+        }));
     }
 }

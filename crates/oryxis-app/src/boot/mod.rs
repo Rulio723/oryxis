@@ -673,6 +673,7 @@ impl Oryxis {
                 loaded_pack_fonts: std::collections::HashSet::new(),
                 error_dialog: None,
                 local_terminals: None,
+                local_terminals_scanning: false,
                 local_terminal_default: None,
                 local_terminal_form: crate::state::LocalTerminalForm::default(),
                 local_terminal_add_open: false,
@@ -805,16 +806,17 @@ impl Oryxis {
         // funnel so the "connect at launch" queue starts now rather
         // than on whatever event the window raises first. The landing
         // is taken either way, so a launch that opened elsewhere does
-        // not park it for a later unlock.
+        // not park it for a later unlock. A launch argument outranks it
+        // whole: no select, and no dial beside the argument's own
+        // foreground one (the tab keeps its place in the queue).
         if app.vault_ui.state == VaultState::Unlocked {
-            let landing = app.take_launch_landing_task();
-            if !landed {
-                tasks.extend(landing);
-            }
+            let landing = app.take_launch_landing_task(landed);
+            tasks.extend(landing.dial);
+            tasks.extend(landing.select);
             tasks.extend(app.launch_dial_kick());
             // Finished downloads a previous process left in the ZMODEM
-            // staging folder go to the default download folder, which
-            // is a setting and therefore only known from here on.
+            // staging folder are OFFERED once the vault is readable (the
+            // download folder is a setting); nothing is moved unasked.
             tasks.extend(app.zmodem_sweep_task());
         }
         // Bring the sync engine up if the vault is already open and the

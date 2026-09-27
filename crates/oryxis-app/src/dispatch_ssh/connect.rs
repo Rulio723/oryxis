@@ -1393,6 +1393,17 @@ impl Oryxis {
             oryxis_core::models::connection::ConnectionProtocol::RemoteDesktop => {
                 // A remote desktop can't live in a split pane; just launch
                 // the external client (the pane keeps its current content).
+                // Nothing is dialled into the pane, so a caller that armed
+                // it as dialling (`restart_pane`, the launch queue) must
+                // not leave it reading "Reconnecting" with every later
+                // Reconnect refused and the launch queue parked on it.
+                if let Some(pane) = self
+                    .tabs
+                    .get_mut(tab_idx)
+                    .and_then(|t| t.pane_by_id_mut(pane_id))
+                {
+                    pane.connecting = false;
+                }
                 return self.launch_remote_desktop(conn);
             }
             oryxis_core::models::connection::ConnectionProtocol::Ssh => {}

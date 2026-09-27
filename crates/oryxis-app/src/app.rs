@@ -1520,6 +1520,11 @@ pub struct Oryxis {
     /// list. `None` means never scanned (the next open triggers the
     /// one-time scan). Machine-local: never synced or exported.
     pub(crate) local_terminals: Option<Vec<crate::state::LocalTerminalEntry>>,
+    /// A rescan of `local_terminals` is running. Read by the "connect at
+    /// launch" queue, which holds a Local host that names a curated
+    /// terminal until the list exists instead of failing it for a scan
+    /// that simply had not finished yet.
+    pub(crate) local_terminals_scanning: bool,
     /// "Always open X" preference: the id of the terminal to open without
     /// a picker, or `None` for "always ask". Backed by the
     /// `local_terminal_default` setting.

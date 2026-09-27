@@ -322,7 +322,29 @@ impl Oryxis {
     ) -> Task<Message> {
         let pick = match self.resolve_local_pick(&conn) {
             Ok(pick) => pick,
-            Err(e) => return self.local_pick_failed(e),
+            Err(e) => {
+                // Unlike the tab path there is a pane here, and it was
+                // armed as dialling (`restart_pane`, the "connect at
+                // launch" queue). Only `PaneConnectError` clears that and
+                // records the verdict; without it the pane reads
+                // "Reconnecting" for good and the launch queue waits on
+                // it forever.
+                let reason = match &e {
+                    LocalPickError::NotScanned => {
+                        crate::i18n::t("local_terminals_not_scanned").to_string()
+                    }
+                    LocalPickError::Missing(name) => {
+                        format!("{}: {name}", crate::i18n::t("local_terminal_missing"))
+                    }
+                };
+                let shown = self.local_pick_failed(e);
+                return Task::batch([
+                    shown,
+                    Task::done(Message::Ssh(crate::app::SshMessage::PaneConnectError(
+                        pane_id, reason,
+                    ))),
+                ]);
+            }
         };
         let palette = self.resolve_terminal_palette_for_connection(&conn);
         let cwd = Self::local_cwd(&conn);
@@ -351,7 +373,15 @@ impl Oryxis {
                 }
                 spawned.map(|rx| (rx, state.pty.as_mut().and_then(|p| p.take_child_exit())))
             }
-            Err(_) => return Task::none(),
+            // A poisoned terminal lock: nothing can be spawned into it,
+            // and the pane was armed as dialling, so it still owes the
+            // verdict that clears the flag.
+            Err(_) => {
+                return Task::done(Message::Ssh(crate::app::SshMessage::PaneConnectError(
+                    pane_id,
+                    crate::i18n::t("terminal_state_unavailable").to_string(),
+                )));
+            }
         };
         let (rx, exited) = match spawned {
             Ok(spawned) => spawned,
@@ -444,7 +474,15 @@ impl Oryxis {
                 }
                 spawned.map(|rx| (rx, state.pty.as_mut().and_then(|p| p.take_child_exit())))
             }
-            Err(_) => return Task::none(),
+            // A poisoned terminal lock: nothing can be spawned into it,
+            // and the pane was armed as dialling, so it still owes the
+            // verdict that clears the flag.
+            Err(_) => {
+                return Task::done(Message::Ssh(crate::app::SshMessage::PaneConnectError(
+                    pane_id,
+                    crate::i18n::t("terminal_state_unavailable").to_string(),
+                )));
+            }
         };
         let (rx, exited) = match spawned {
             Ok(spawned) => spawned,

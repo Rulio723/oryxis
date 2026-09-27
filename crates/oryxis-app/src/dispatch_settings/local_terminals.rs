@@ -167,12 +167,14 @@ impl Oryxis {
                 self.ensure_panel_tab(crate::state::PanelKind::Settings);
             }
             SettingsMessage::RescanLocalTerminals => {
+                self.local_terminals_scanning = true;
                 return Ok(Task::perform(
                     tokio::task::spawn_blocking(detect_local_shells),
                     |result| Message::Settings(SettingsMessage::LocalTerminalsRescanned(result.unwrap_or_default())),
                 ));
             }
             SettingsMessage::LocalTerminalsRescanned(shells) => {
+                self.local_terminals_scanning = false;
                 // Merge: keep everything already curated (manual entries and
                 // user edits), append only detected entries whose command
                 // isn't present yet. A previously-removed-but-still-detected

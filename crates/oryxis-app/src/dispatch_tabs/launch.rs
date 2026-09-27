@@ -54,12 +54,48 @@ impl Oryxis {
         if in_flight {
             return None;
         }
+        // A Local host naming a curated terminal resolves it from
+        // `local_terminals`, which a machine that never looked (or a
+        // vault that booted locked, so the boot scan saw no hosts) does
+        // not have yet. Dialling now would fail the tab for a scan that
+        // had not run; the queue starts one and waits for it instead.
+        if let Some(&front) = self.launch_dials.front()
+            && self.local_terminals.is_none()
+            && self.queued_tab_needs_terminal_list(front)
+        {
+            if self.local_terminals_scanning {
+                return None;
+            }
+            return Some(Task::done(Message::Settings(
+                crate::app::SettingsMessage::RescanLocalTerminals,
+            )));
+        }
         while let Some(id) = self.launch_dials.pop_front() {
             if let Some(task) = self.dial_dormant_in_place(id) {
                 return Some(task);
             }
         }
         None
+    }
+
+    /// Whether the queued tab `tab_id` is a saved Local host that names a
+    /// curated terminal (and so cannot resolve before the list exists).
+    fn queued_tab_needs_terminal_list(&self, tab_id: uuid::Uuid) -> bool {
+        let Some(crate::state::PinnedTabSpec::Host { id, .. }) = self
+            .tabs
+            .iter()
+            .find(|t| t._id == tab_id)
+            .and_then(|t| t.pending_reopen.as_ref())
+        else {
+            return false;
+        };
+        self.connections.iter().find(|c| c.id == *id).is_some_and(|c| {
+            c.protocol == oryxis_core::models::connection::ConnectionProtocol::Local
+                && c.local.as_ref().is_some_and(|l| {
+                    l.terminal_id.is_some()
+                        || l.terminal_label.as_deref().is_some_and(|s| !s.trim().is_empty())
+                })
+        })
     }
 
     /// Dial a dormant tab INTO its own pane, keeping its slot, pin and
@@ -80,6 +116,15 @@ impl Oryxis {
                 // A host deleted since the snapshot stays a dormant
                 // chip: selecting it says so, the way it always did.
                 let conn_idx = self.connections.iter().position(|c| c.id == id)?;
+                // A host edited into a remote desktop since the snapshot
+                // has no pane to dial into: the in-place path would only
+                // launch the external client, unasked, at startup. It
+                // stays dormant and a select opens it the usual way.
+                if self.connections[conn_idx].protocol
+                    == oryxis_core::models::connection::ConnectionProtocol::RemoteDesktop
+                {
+                    return None;
+                }
                 let conn = self.connections[conn_idx].clone();
                 self.tabs[tab_idx].pending_reopen = None;
                 // What a fresh dial of this host would give the tab: its
@@ -148,35 +193,64 @@ impl Oryxis {
 
     /// The landing on the chip that was active, taken by the ONE site
     /// that lands (boot for an open vault, the unlock otherwise), and
-    /// only when nothing with a stronger claim (`--connect`, a deep
-    /// link, a CLI target) is landing already.
+    /// taken there whatever else is landing, so a later unlock (a soft
+    /// lock's) finds nothing left to land on.
     ///
-    /// Under "connect when selected" the select IS the connect, the
-    /// #206 gesture performed for the user. Under "connect at launch"
-    /// the landing tab is dialled in place FIRST, synchronously, so the
-    /// select finds it already reopening rather than running the
-    /// foreground reopen on it, which would replace the placeholder
-    /// with a second tab while the queue still named the first.
-    pub(crate) fn take_launch_landing_task(&mut self) -> Option<Task<Message>> {
-        let target = self.launch_landing.take()?;
+    /// `outranked` is a launch argument with a stronger claim on where
+    /// the app opens (`--connect`, a deep link, a CLI target). Then the
+    /// landing does NOTHING: no select, and no dial either, because the
+    /// argument runs a foreground dial of its own and a second one in
+    /// flight at the same moment is exactly what the sequential queue
+    /// exists to prevent (the host-key / 2FA / proxy answers ride
+    /// single slots). The tab stays in `launch_dials` and dials in its
+    /// turn once the foreground one settles.
+    ///
+    /// Otherwise the landing tab is dialled in place FIRST,
+    /// synchronously, so the select finds it already reopening rather
+    /// than running the foreground reopen on it (which would replace the
+    /// placeholder with a second tab while the queue still named the
+    /// first). Taking it out of the queue raises the pane's in-flight
+    /// flag, so the returned `dial` must always be run: dropping it
+    /// would leave the pane dialling forever and the funnel waiting on
+    /// it with every other restored tab behind.
+    pub(crate) fn take_launch_landing_task(&mut self, outranked: bool) -> LaunchLanding {
+        let mut out = LaunchLanding::default();
+        let Some(target) = self.launch_landing.take() else {
+            return out;
+        };
+        if outranked {
+            return out;
+        }
         match target {
             crate::state::TabRef::Terminal(id) => {
-                let mut tasks = Vec::new();
                 if self.launch_dials.iter().any(|q| *q == id) {
                     self.launch_dials.retain(|q| *q != id);
-                    tasks.extend(self.dial_dormant_in_place(id));
+                    if self.local_terminals.is_none() && self.queued_tab_needs_terminal_list(id) {
+                        // Its terminal list is not there yet: first in
+                        // line instead, dialled by the funnel once the
+                        // scan it starts has answered.
+                        self.launch_dials.push_front(id);
+                    } else {
+                        out.dial = self.dial_dormant_in_place(id);
+                    }
                 }
-                let idx = self.tabs.iter().position(|t| t._id == id)?;
-                tasks.push(Task::done(Message::Tabs(TabsMessage::SelectTab(idx))));
-                Some(Task::batch(tasks))
+                out.select = self
+                    .tabs
+                    .iter()
+                    .position(|t| t._id == id)
+                    .map(|idx| Task::done(Message::Tabs(TabsMessage::SelectTab(idx))));
             }
             crate::state::TabRef::Sftp(id) => {
-                let idx = self.sftp_tabs.iter().position(|t| t.id == id)?;
-                Some(Task::done(Message::Sftp(SftpMessage::SelectSftpTab(idx))))
+                out.select = self
+                    .sftp_tabs
+                    .iter()
+                    .position(|t| t.id == id)
+                    .map(|idx| Task::done(Message::Sftp(SftpMessage::SelectSftpTab(idx))));
             }
             // Never written by the snapshot (panels are not restored).
-            crate::state::TabRef::Panel(_) => None,
+            crate::state::TabRef::Panel(_) => {}
         }
+        out
     }
 
     /// A message for the boot to return so the funnel runs once and
@@ -185,4 +259,12 @@ impl Oryxis {
     pub(crate) fn launch_dial_kick(&self) -> Option<Task<Message>> {
         (!self.launch_dials.is_empty()).then(|| Task::done(Message::NoOp))
     }
+}
+
+/// What [`Oryxis::take_launch_landing_task`] hands the landing site.
+/// Both halves must be run; an outranked landing hands back neither.
+#[derive(Default)]
+pub(crate) struct LaunchLanding {
+    pub dial: Option<Task<Message>>,
+    pub select: Option<Task<Message>>,
 }
