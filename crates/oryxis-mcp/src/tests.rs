@@ -9,7 +9,7 @@ mod tests {
     use oryxis_core::models::key::{KeyAlgorithm, SshKey};
     use oryxis_vault::VaultStore;
 
-    use crate::handlers::dial_signature;
+    use crate::handlers::{dial_signature, reuse_signature};
     use crate::server::Server;
     use crate::stdio;
     use crate::tools::tool_definitions;
@@ -324,6 +324,92 @@ mod tests {
         assert_ne!(dial_signature(&hopped), before);
     }
 
+    fn pin(host: &str, port: u16, key_type: &str, fingerprint: &str) -> oryxis_core::models::KnownHost {
+        let now = chrono::Utc::now();
+        oryxis_core::models::KnownHost {
+            id: uuid::Uuid::new_v4(),
+            hostname: host.into(),
+            port,
+            key_type: key_type.into(),
+            fingerprint: fingerprint.into(),
+            first_seen: now,
+            last_seen: now,
+            updated_at: now,
+        }
+    }
+
+    /// Withdrawing trust from a route stops the pool reusing a
+    /// connection dialled under it: removing or replacing the host's
+    /// pin, or revoking its command proxy. An unrelated pin does not.
+    #[test]
+    fn reuse_signature_follows_the_trust_the_dial_needed() {
+        use oryxis_core::models::connection::{proxy_command_fingerprint, ProxyConfig, ProxyType};
+        use std::collections::HashSet;
+
+        let conn = Connection::new("web", "10.0.0.1");
+        let pins = vec![pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:aaa")];
+        let none = HashSet::new();
+        let before = reuse_signature(&conn, &[], &pins, &none);
+
+        let mut other = pins.clone();
+        other.push(pin("10.0.0.9", 22, "ssh-ed25519", "SHA256:zzz"));
+        assert_eq!(reuse_signature(&conn, &[], &other, &none), before);
+
+        assert_ne!(reuse_signature(&conn, &[], &[], &none), before, "pin removed");
+        let changed = vec![pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:bbb")];
+        assert_ne!(reuse_signature(&conn, &[], &changed, &none), before, "pin replaced");
+
+        let line = "ssh -W %h:%p bastion";
+        let mut proxied = conn.clone();
+        proxied.proxy = Some(ProxyConfig {
+            proxy_type: ProxyType::Command(line.into()),
+            host: String::new(),
+            port: 0,
+            username: None,
+            password: None,
+        });
+        let trusted: HashSet<String> = [proxy_command_fingerprint(line)].into();
+        assert_ne!(
+            reuse_signature(&proxied, &[], &pins, &trusted),
+            reuse_signature(&proxied, &[], &pins, &none),
+            "revoking the command proxy"
+        );
+    }
+
+    /// A pin withdrawn from a bastion of the jump chain withdraws the
+    /// route too; a pin of a host that is not on the route does not.
+    #[test]
+    fn reuse_signature_follows_the_pins_of_every_hop() {
+        use std::collections::HashSet;
+
+        let conn = Connection::new("db", "10.0.0.1");
+        let hops = [("bastion.example", 22u16)];
+        let none = HashSet::new();
+        let pins = vec![
+            pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:aaa"),
+            pin("bastion.example", 22, "ssh-ed25519", "SHA256:bbb"),
+        ];
+        let before = reuse_signature(&conn, &hops, &pins, &none);
+        let mut unrelated = pins.clone();
+        unrelated.push(pin("elsewhere", 22, "ssh-ed25519", "SHA256:zzz"));
+        assert_eq!(reuse_signature(&conn, &hops, &unrelated, &none), before);
+        let bastion_gone = vec![pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:aaa")];
+        assert_ne!(
+            reuse_signature(&conn, &hops, &bastion_gone, &none),
+            before,
+            "bastion pin removed"
+        );
+        let bastion_changed = vec![
+            pin("10.0.0.1", 22, "ssh-ed25519", "SHA256:aaa"),
+            pin("bastion.example", 22, "ssh-ed25519", "SHA256:ccc"),
+        ];
+        assert_ne!(
+            reuse_signature(&conn, &hops, &bastion_changed, &none),
+            before,
+            "bastion pin replaced"
+        );
+    }
+
     async fn send(w: &mut tokio::io::DuplexStream, v: Value) {
         use tokio::io::AsyncWriteExt;
         w.write_all(format!("{}\n", v).as_bytes()).await.unwrap();
@@ -418,5 +504,32 @@ mod tests {
             .expect("the loop ends when its input closes")
             .unwrap();
         drop(listener);
+    }
+    /// A client that writes and closes its end at once still reads the
+    /// answers: EOF flushes the writer instead of aborting it.
+    #[tokio::test]
+    async fn answers_queued_at_eof_still_go_out() {
+        use std::sync::Arc;
+        use tokio::io::AsyncBufReadExt;
+
+        let server = Server::new(test_vault());
+        let (mut client_w, server_r) = tokio::io::duplex(1 << 16);
+        let (server_w, client_r) = tokio::io::duplex(1 << 16);
+        let loop_task = tokio::spawn(stdio::serve(Arc::clone(&server), server_r, server_w));
+        send(&mut client_w, json!({"jsonrpc": "2.0", "id": 1, "method": "ping"})).await;
+        send(&mut client_w, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).await;
+        drop(client_w);
+        tokio::time::timeout(std::time::Duration::from_secs(5), loop_task)
+            .await
+            .expect("the loop ends when its input closes")
+            .unwrap();
+        let mut lines = tokio::io::BufReader::new(client_r).lines();
+        let mut ids = Vec::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let v: Value = serde_json::from_str(&line).unwrap();
+            ids.push(v["id"].as_i64().unwrap());
+        }
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2]);
     }
 }

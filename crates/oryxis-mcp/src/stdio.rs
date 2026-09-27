@@ -98,7 +98,11 @@ where
         let mut map = lock_or_recover(&in_flight);
         let seq = map.next_seq;
         map.next_seq += 1;
-        map.entries.insert(key.clone(), (seq, cancel_tx));
+        if map.entries.insert(key.clone(), (seq, cancel_tx)).is_some() {
+            // JSON-RPC forbids reusing an id while it is in flight; a
+            // client that does so can now only cancel the newer one.
+            tracing::debug!(id = %key, "request id reused while the first is still running");
+        }
         tokio::spawn(run_request(
             Arc::clone(&server),
             request,
@@ -112,12 +116,21 @@ where
         drop(map);
     }
 
-    // Input gone: nobody will read another response. Close what we
-    // hold on the hosts before the process ends.
+    // Input gone. Close what we hold on the hosts before the process
+    // ends, then let the writer flush what is queued: a client that
+    // half-closes its end right after writing (`echo ... | oryxis-mcp`,
+    // a test harness) still reads the answers. The writer ends when the
+    // last sender does; a request still running holds one, hence the
+    // bound.
     server.shutdown().await;
     drop(out_tx);
-    writer_task.abort();
+    if tokio::time::timeout(DRAIN_TIMEOUT, writer_task).await.is_err() {
+        tracing::info!("input closed with requests still running; their answers are dropped");
+    }
 }
+
+/// How long the writer may keep flushing after the input closed.
+const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[allow(clippy::too_many_arguments)]
 async fn run_request(

@@ -142,6 +142,15 @@ impl Pool {
                 guard.take();
             }
         }
+        // Then forget the slots left empty, so the map tracks the hosts
+        // in use rather than every host ever called. Only a slot nobody
+        // else holds: `slot()` clones under this same lock, so a count
+        // of one here means no call is between finding the slot and
+        // locking it, and removing it cannot strand a dial.
+        let mut slots = lock_or_recover(&self.slots);
+        slots.retain(|_, slot| {
+            Arc::strong_count(slot) > 1 || slot.try_lock().map(|g| g.is_some()).unwrap_or(true)
+        });
     }
 
     /// Close every connection and wait for the disconnects to go out,
@@ -168,10 +177,12 @@ impl Pool {
     /// connection when one is live and still matches the plan's
     /// signature, else over a fresh dial that is then pooled.
     ///
-    /// A reused connection that refuses the channel open is dropped and
-    /// the dial retried once: the keepalive has a window in which a dead
-    /// link still reads as alive. A command that TIMES OUT is never
-    /// retried, it may have acted on the host.
+    /// A reused connection that turns out dead (closed, or silent on the
+    /// channel open: the keepalive has a window in which a dead link
+    /// still reads as alive) is dropped and the dial retried once. One
+    /// the server answered with a REFUSAL is healthy and stays pooled;
+    /// the call runs on a one-off connection instead. A command that
+    /// TIMES OUT is never retried, it may have acted on the host.
     ///
     /// `cancel` is honoured at every wait: the slot, the dial and the
     /// command. A dial dropped mid-flight takes its connection with it
@@ -256,18 +267,113 @@ impl Pool {
                     })
                 }
                 Err(SshError::Channel(why)) if reused && refused.is_none() => {
-                    tracing::info!(
-                        host = %plan.label,
-                        endpoint = %plan.endpoint,
-                        error = %why,
-                        "pool: pooled connection refused a channel, dialling fresh"
-                    );
-                    refused = Some(conn);
-                    continue;
+                    match channel_verdict(&why, conn.is_alive()) {
+                        ChannelVerdict::Dead => {
+                            tracing::info!(
+                                host = %plan.label,
+                                endpoint = %plan.endpoint,
+                                error = %why,
+                                "pool: pooled connection is gone, dialling fresh"
+                            );
+                            refused = Some(conn);
+                            continue;
+                        }
+                        ChannelVerdict::Refused => {
+                            // The server answered, so the link is
+                            // healthy and stays pooled: it is busy
+                            // (`MaxSessions`) or policy said no to one
+                            // more channel. Evicting it would redial the
+                            // host on every call past the limit, the
+                            // login churn the pool exists to prevent.
+                            // This call gets a connection of its own,
+                            // closed as soon as it has answered.
+                            tracing::info!(
+                                host = %plan.label,
+                                endpoint = %plan.endpoint,
+                                error = %why,
+                                "pool: pooled connection refused a channel, running on a one-off connection"
+                            );
+                            return self
+                                .exec_overflow(&plan, command, run_timeout, cancel, &fail)
+                                .await;
+                        }
+                        ChannelVerdict::Other => return Err(fail("exec", SshError::Channel(why))),
+                    }
                 }
                 Err(e) => return Err(fail("exec", e)),
             }
         }
+    }
+
+    /// Run `command` on a connection dialled for this call alone and
+    /// closed once it has answered. The pooled one refused a channel
+    /// while alive, so it stays where it is for the calls that fit.
+    async fn exec_overflow(
+        &self,
+        plan: &DialPlan,
+        command: &str,
+        run_timeout: Duration,
+        mut cancel: watch::Receiver<bool>,
+        fail: &(impl Fn(&'static str, SshError) -> Box<PoolFailure> + ?Sized),
+    ) -> Result<PoolRun, Box<PoolFailure>> {
+        let dial_started = Instant::now();
+        let conn = tokio::select! {
+            dialled = dial(plan) => dialled?,
+            () = cancelled(&mut cancel) => return Err(fail("connect", SshError::Cancelled)),
+        };
+        let dial_ms = dial_started.elapsed().as_millis();
+        let exec_started = Instant::now();
+        let outcome = conn
+            .exec_capture(command, None, OPEN_TIMEOUT, run_timeout, Some(cancel))
+            .await;
+        let exec_ms = exec_started.elapsed().as_millis();
+        let _ = tokio::time::timeout(Duration::from_secs(1), conn.disconnect()).await;
+        match outcome {
+            Ok(result) => Ok(PoolRun {
+                label: plan.label.clone(),
+                endpoint: plan.endpoint.clone(),
+                reused: false,
+                dial_ms,
+                exec_ms,
+                result,
+            }),
+            Err(e) => Err(fail("exec", e)),
+        }
+    }
+}
+
+/// What a channel failure on a POOLED connection says about it.
+#[derive(Debug, PartialEq, Eq)]
+enum ChannelVerdict {
+    /// The link is gone, or silent: closed, or the open got no answer
+    /// inside [`OPEN_TIMEOUT`] (the keepalive has a window in which a
+    /// NAT-dropped link still reads as alive). Redial once.
+    Dead,
+    /// The server answered with `SSH_MSG_CHANNEL_OPEN_FAILURE`: the link
+    /// is fine and said no to one more channel.
+    Refused,
+    /// Anything else: the channel opened, so the command may have run.
+    /// Never retried.
+    Other,
+}
+
+/// Classify a `SshError::Channel` from `exec_capture_on`. The strings
+/// are that function's own prefixes (`open session:` wrapping russh's
+/// `ChannelOpenFailure` display, and the open timeout's message);
+/// `channel_verdict_matches_the_engine_wording` pins them.
+fn channel_verdict(why: &str, alive: bool) -> ChannelVerdict {
+    if !alive || why.starts_with("channel open timed out") || why == "connection closed" {
+        ChannelVerdict::Dead
+    } else if why.starts_with("open session:") {
+        if why.contains("Failed to open channel") {
+            ChannelVerdict::Refused
+        } else {
+            // A transport error on the open (send failed, disconnect):
+            // nothing reached the host.
+            ChannelVerdict::Dead
+        }
+    } else {
+        ChannelVerdict::Other
     }
 }
 
@@ -314,5 +420,51 @@ fn lock_or_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match m.lock() {
         Ok(g) => g,
         Err(poison) => poison.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wording `exec_capture_on` produces, verbatim: russh's
+    /// `ChannelOpenFailure` displays as "Failed to open channel (..)"
+    /// and the engine prefixes the open with "open session:". A change
+    /// on either side must come through here, or a refusal starts
+    /// redialling again (or a dead link stops being noticed).
+    #[test]
+    fn channel_verdict_matches_the_engine_wording() {
+        let refused = "open session: Failed to open channel (AdministrativelyProhibited)";
+        assert_eq!(channel_verdict(refused, true), ChannelVerdict::Refused);
+        // The same refusal on a link that has since closed is a dead one.
+        assert_eq!(channel_verdict(refused, false), ChannelVerdict::Dead);
+        assert_eq!(
+            channel_verdict("channel open timed out after 10s", true),
+            ChannelVerdict::Dead
+        );
+        assert_eq!(channel_verdict("connection closed", true), ChannelVerdict::Dead);
+        assert_eq!(
+            channel_verdict("open session: Disconnected", true),
+            ChannelVerdict::Dead
+        );
+        // Past the open the command may have run: never retried.
+        assert_eq!(channel_verdict("exec: Send error", true), ChannelVerdict::Other);
+        assert_eq!(channel_verdict("stdin: Send error", true), ChannelVerdict::Other);
+    }
+
+    #[test]
+    fn sweep_forgets_empty_slots_nobody_holds() {
+        let pool = Pool::new();
+        let idle = Uuid::new_v4();
+        let held = Uuid::new_v4();
+        drop(pool.slot(idle));
+        // A call between finding its slot and locking it.
+        let in_use = pool.slot(held);
+        pool.sweep_idle();
+        let slots = lock_or_recover(&pool.slots);
+        assert!(!slots.contains_key(&idle), "an empty slot is forgotten");
+        assert!(slots.contains_key(&held), "a slot a call holds is kept");
+        drop(slots);
+        drop(in_use);
     }
 }

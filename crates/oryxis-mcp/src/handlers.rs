@@ -172,7 +172,7 @@ pub struct DialPlan {
     pub private_key: Option<String>,
     pub certificate: Option<String>,
     pub engine: SshEngine,
-    /// [`dial_signature`] of `auth_conn`, the pool's reuse key.
+    /// [`reuse_signature`] of `auth_conn`, the pool's reuse key.
     pub signature: u64,
 }
 
@@ -221,6 +221,55 @@ pub fn dial_signature(conn: &Connection) -> u64 {
     conn.kex.hash(&mut h);
     conn.macs.hash(&mut h);
     conn.host_key_algorithms.hash(&mut h);
+    h.finish()
+}
+
+/// The reuse key the pool compares: [`dial_signature`] plus the two
+/// POLICY answers that decided whether the pooled connection was
+/// allowed to be dialled at all, the host key pinned for its (host,
+/// port) and, for a command proxy, whether that line is approved on
+/// this device. Revoking either is the user withdrawing trust from the
+/// route; a connection kept from before must not outlive that for the
+/// idle window (it would keep serving a host whose pin was removed as
+/// suspect). `pins` is the vault's known-hosts list; only the entries
+/// for this endpoint are hashed, sorted, so an unrelated pin never
+/// redials anything.
+///
+/// `hops` are the endpoints of the jump chain, in order: a route is
+/// trusted hop by hop, and a pin withdrawn from a bastion withdraws the
+/// route as surely as one withdrawn from the target. (The chain's ids
+/// are already in [`dial_signature`]; this adds what each hop's key is
+/// trusted as.)
+pub fn reuse_signature(
+    conn: &Connection,
+    hops: &[(&str, u16)],
+    pins: &[oryxis_core::models::known_host::KnownHost],
+    trusted_proxy_commands: &std::collections::HashSet<String>,
+) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    dial_signature(conn).hash(&mut h);
+    let pins_of = |host: &str, port: u16| {
+        let mut own: Vec<(&str, &str)> = pins
+            .iter()
+            .filter(|p| p.hostname == host && p.port == port)
+            .map(|p| (p.key_type.as_str(), p.fingerprint.as_str()))
+            .collect();
+        own.sort_unstable();
+        own
+    };
+    pins_of(&conn.hostname, conn.port).hash(&mut h);
+    for (host, port) in hops {
+        pins_of(host, *port).hash(&mut h);
+    }
+    if let Some(oryxis_core::models::connection::ProxyConfig {
+        proxy_type: oryxis_core::models::connection::ProxyType::Command(cmd),
+        ..
+    }) = &conn.proxy
+    {
+        trusted_proxy_commands
+            .contains(&oryxis_core::models::connection::proxy_command_fingerprint(cmd))
+            .hash(&mut h);
+    }
     h.finish()
 }
 
@@ -345,10 +394,31 @@ pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanE
     // Same authority and same helper the app's unattended dials use, so
     // a host that runs over MCP is exactly a host the user approved in
     // the app, never one a sync peer wrote into the vault.
-    let trusted_proxy_commands = vault
+    let trusted_proxy_commands: std::collections::HashSet<String> = vault
         .list_trusted_proxy_commands()
         .map(|list| list.into_iter().map(|t| t.fingerprint).collect())
         .unwrap_or_default();
+    // Each hop's endpoint. Looked up among ALL hosts, not only the ones
+    // exposed to MCP: a bastion is part of the route whether or not it
+    // is itself a tool target. A dangling id has no endpoint and no pin
+    // to follow.
+    let hop_hosts = if auth_conn.jump_chain.is_empty() {
+        Vec::new()
+    } else {
+        vault.list_connections().unwrap_or_default()
+    };
+    let hops: Vec<(&str, u16)> = auth_conn
+        .jump_chain
+        .iter()
+        .filter_map(|id| hop_hosts.iter().find(|c| c.id == *id))
+        .map(|c| (c.hostname.as_str(), c.port))
+        .collect();
+    let signature = reuse_signature(
+        &auth_conn,
+        &hops,
+        &vault.list_known_hosts().unwrap_or_default(),
+        &trusted_proxy_commands,
+    );
     let engine = SshEngine::new()
         // Verify the server key against the vault's pins and reject
         // unknown/changed ones: there is no terminal here to surface a
@@ -383,7 +453,7 @@ pub fn resolve_dial_plan(vault: &VaultStore, id: Uuid) -> Result<DialPlan, PlanE
         conn_id: conn.id,
         label: conn.label.clone(),
         endpoint: oryxis_core::net::host_port(&conn.hostname, conn.port),
-        signature: dial_signature(&auth_conn),
+        signature,
         auth_conn,
         password: final_password,
         private_key: final_key,
