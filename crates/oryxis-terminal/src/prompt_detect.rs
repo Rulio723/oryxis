@@ -161,16 +161,54 @@ pub fn prompt_target(prompt: &str) -> Option<PromptTarget> {
     let caps = TARGET_SHAPES.captures(prompt.trim_end())?;
     let host = ["h1", "h2", "h3"].iter().find_map(|n| caps.name(n))?.as_str();
     // IPv6 in brackets reads the same as the host field it was typed in.
-    let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
+    let host = visible_only(host.trim_start_matches('[').trim_end_matches(']'));
     let user = ["u1", "u2", "u3"]
         .iter()
         .find_map(|n| caps.name(n))
-        .map(|m| m.as_str().to_string());
+        .map(|m| visible_only(m.as_str()))
+        .filter(|u| !u.is_empty());
+    if host.is_empty() {
+        return None;
+    }
     Some(PromptTarget { user, host })
+}
+
+/// `s` without control and invisible formatting characters. The prompt
+/// is text a remote host printed, and a bidi override (U+202E) or a zero
+/// width joiner inside it would make the popup's title read as a
+/// different host than the one the text names; stripped, the title shows
+/// the characters that are actually there and the host comparison sees
+/// them too.
+fn visible_only(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{00AD}'
+                        | '\u{061C}'
+                        | '\u{180E}'
+                        | '\u{200B}'..='\u{200F}'
+                        | '\u{202A}'..='\u{202E}'
+                        | '\u{2060}'..='\u{2064}'
+                        | '\u{2066}'..='\u{2069}'
+                        | '\u{FEFF}'
+                )
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_target_carries_no_invisible_formatting() {
+        let t = super::prompt_target("bob@\u{202E}moc.elpmaxe-bew's password:").unwrap();
+        assert_eq!(t.host, "moc.elpmaxe-bew");
+        assert_eq!(t.user.as_deref(), Some("bob"));
+        let t = super::prompt_target("b\u{200D}ob@db's password:").unwrap();
+        assert_eq!(t.user.as_deref(), Some("bob"));
+    }
+
     use super::*;
 
     #[test]

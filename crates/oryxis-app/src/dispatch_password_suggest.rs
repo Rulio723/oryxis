@@ -144,15 +144,18 @@ pub(crate) fn rank_password_sources(
     out
 }
 
-/// What the popup's title should name, when the prompt asks for a
-/// machine other than the pane's own host: `user@host` as the prompt
-/// printed it, or just the host. `None` for the pane's own prompt,
-/// which the ordinary title already describes.
-pub(crate) fn foreign_prompt_label(
-    conn: Option<&oryxis_core::models::Connection>,
+/// What the popup's title should name: the machine the prompt names,
+/// `user@host` as printed (or just the host), WHENEVER it names one,
+/// the pane's own host included. Inside tmux or screen the pane cannot
+/// tell which of the multiplexer's panes printed the prompt, and a
+/// hostile session in a neighbouring pane can print the pane host's own
+/// prompt shape; saying whose password is being asked for, every time,
+/// is what lets the user see that before picking. `None` for a prompt
+/// that names no machine (`sudo`, `doas`, a bare `Password:`).
+pub(crate) fn prompt_target_label(
     target: Option<&oryxis_terminal::prompt_detect::PromptTarget>,
 ) -> Option<String> {
-    let target = target.filter(|t| conn.is_none_or(|c| !names_host(c, &t.host)))?;
+    let target = target?;
     Some(match &target.user {
         Some(user) => format!("{user}@{}", target.host),
         None => target.host.clone(),
@@ -208,7 +211,7 @@ impl Oryxis {
             &with_password,
             &identities_with_password,
         );
-        (entries, foreign_prompt_label(conn, target.as_ref()))
+        (entries, prompt_target_label(target.as_ref()))
     }
 
     /// The pane a password prompt may raise a popup on right now, or
@@ -672,19 +675,19 @@ mod tests {
     }
 
     #[test]
-    fn the_title_names_only_a_foreign_target() {
-        use oryxis_core::models::Connection;
-        let web = Connection::new("web", "web.example");
+    fn the_title_names_whatever_machine_the_prompt_names() {
         let target = |p: &str| oryxis_terminal::prompt_detect::prompt_target(p);
-        // The pane's own host (by address or by label) keeps the plain title.
-        assert_eq!(foreign_prompt_label(Some(&web), target("bob@web.example's password:").as_ref()), None);
-        assert_eq!(foreign_prompt_label(Some(&web), target("bob@WEB's password:").as_ref()), None);
-        // Another machine is named as the prompt printed it.
+        // The pane's own host is named too: inside tmux the prompt may
+        // come from a different session printing that host's shape.
         assert_eq!(
-            foreign_prompt_label(Some(&web), target("bob@db's password:").as_ref()),
+            prompt_target_label(target("bob@web.example's password:").as_ref()),
+            Some("bob@web.example".to_string())
+        );
+        assert_eq!(
+            prompt_target_label(target("bob@db's password:").as_ref()),
             Some("bob@db".to_string())
         );
-        // A local `sudo` names nobody.
-        assert_eq!(foreign_prompt_label(Some(&web), target("[sudo] password for bob:").as_ref()), None);
+        // A local `sudo` names nobody, and keeps the plain title.
+        assert_eq!(prompt_target_label(target("[sudo] password for bob:").as_ref()), None);
     }
 }

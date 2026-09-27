@@ -167,11 +167,11 @@ pub(crate) enum OverlayContent {
         /// navigation, so a burst of arrow presses before the next
         /// event arrives still computes against a fresh position.
         scroll: f32,
-        /// The machine the prompt names when it is NOT the pane's own
-        /// host (`bob@db's password:` typed into an `ssh db` inside the
-        /// session on `web`), printed in the title so the user sees
-        /// whose password is being asked for before picking one.
-        /// `None` for the ordinary prompt of the pane's own host.
+        /// The machine the prompt names (`bob@db's password:`), the
+        /// pane's own host included, printed in the title so the user
+        /// sees whose password is being asked for before picking one.
+        /// `None` for a prompt that names no machine (`sudo`, a bare
+        /// `Password:`).
         prompt_for: Option<String>,
     },
 }
