@@ -95,6 +95,14 @@ matching installer. Windows binaries are Authenticode-signed (see
 
 </details>
 
+### Portable data mode
+
+Place a file named `oryxis.portable` beside the executable to keep all
+Oryxis-owned data in a sibling `.oryxis/` directory instead of the user's
+home directory. Copy the executable, marker, and `.oryxis/` together when
+moving the app to a USB drive. User-selected external paths such as SSH
+configuration, downloads, and custom session-log folders are not relocated.
+
 ## Highlights
 
 - **Native and fast.** Pure Rust, GPU-accelerated [iced](https://iced.rs)

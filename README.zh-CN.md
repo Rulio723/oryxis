@@ -64,6 +64,13 @@ yay -S oryxis-bin
 macOS（Apple Silicon `.dmg`）和 Windows（系统级与用户级安装器、便携版
 `.zip`，x86_64 与 ARM64）。Windows 二进制已进行 Authenticode 签名。
 
+### 便携数据模式
+
+在可执行文件旁放置名为 `oryxis.portable` 的文件后，Oryxis 自有数据会
+保存到同目录的 `.oryxis/`，不再写入用户主目录。需要移动到 U 盘时，
+请一起复制可执行文件、标记文件和 `.oryxis/`。用户自行选择的外部路径，
+例如 SSH 配置、下载目录和自定义会话日志目录，不会被强制迁移。
+
 ### 中国大陆网络说明
 
 在无法顺畅访问 GitHub 的网络环境下，Oryxis 内置了下载镜像支持：
