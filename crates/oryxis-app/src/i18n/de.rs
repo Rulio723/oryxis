@@ -2299,6 +2299,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "Der öffentliche Schlüssel passt nicht zum privaten Schlüssel.",
         "cert_no_keys_hint" => "Kein Schlüssel im Tresor hat bisher ein angehängtes Zertifikat.",
         "cert_key_no_cert_hint" => "Der ausgewählte Schlüssel hat kein angehängtes Zertifikat.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Sicherheitsschlüssel",
+        "security_key_help" => "Nur dieser Hardware-Schlüssel wird angeboten: kein Agent, kein anderer Schlüssel und kein Passwort als Rückfall. Fehlt der Schlüssel oder wird die Berührung abgelehnt, schlägt die Verbindung fehl.",
+        "security_key_none_imported" => "Noch kein Sicherheitsschlüssel im Tresor. Importieren Sie die von ssh-keygen erzeugte Datei id_ed25519_sk.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Öffentlichen Schlüssel importieren",
         "key_badge_security_key" => "Sicherheitsschlüssel",

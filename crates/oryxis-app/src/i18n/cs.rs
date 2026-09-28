@@ -2336,6 +2336,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "Veřejný klíč neodpovídá privátnímu klíči.",
         "cert_no_keys_hint" => "Žádný klíč v trezoru zatím nemá připojený certifikát.",
         "cert_key_no_cert_hint" => "Vybraný klíč nemá připojený certifikát.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Bezpečnostní klíč",
+        "security_key_help" => "Bude nabídnut pouze tento hardwarový klíč: bez agenta, jiného klíče nebo záložního hesla. Pokud klíč chybí nebo je dotyk odmítnut, připojení selže.",
+        "security_key_none_imported" => "V trezoru zatím není žádný bezpečnostní klíč. Importujte soubor id_ed25519_sk vytvořený nástrojem ssh-keygen.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importovat veřejný klíč",
         "key_badge_security_key" => "Bezpečnostní klíč",

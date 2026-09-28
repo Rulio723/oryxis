@@ -6,8 +6,15 @@ project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Security keys can sign in natively: import the `id_ed25519_sk` file `ssh-keygen -t ed25519-sk` produced and Oryxis parses the credential handle and assembles the signature itself — no `ssh-agent` in the middle and no `IdentityFile` juggling. A missing key, a declined touch and a rejected request each fail with their own message instead of a generic auth error.
+  - On Windows the signing goes through the Windows Hello WebAuthn API, so it needs no administrator rights — the same route Microsoft's own OpenSSH takes, and the only one available to a normally-launched process, since Windows 10 1903 and later deny raw USB HID access to a FIDO device from a non-elevated process. A CTAP2-over-HID transport remains for machines without Windows Hello; it requires administrator rights, and the token it was measured against rejects any request larger than a single packet (`sk::hid_windows` records what was ruled out). `cargo run -p oryxis-ssh --example sk_acceptance -- <key>` exercises whichever transport the machine has, and verifies the result with OpenSSH's own reconstruction.
+- A "Security Key" auth method per host: only the chosen token is offered. No agent sweep, no other key, no password or keyboard-interactive fallback — the key really is the second factor. The host editor says so, and points at the import when the vault has no usable hardware key yet.
+- A security key named in "Use key from `~/.ssh`" (or an explicit `IdentityFile`) authenticates the same way, so an existing `id_ed25519_sk` needs no import at all.
+
 ### Changed
 - A command proxy line runs as `exec <line>`, the way OpenSSH runs it, and stopping a dial ends the proxy together with anything it started.
+- Security keys are no longer offered to Oryxis's built-in ssh-agent. The agent cannot complete a signature for one, and the key menu already hid the toggle; the vault no longer advertises an identity it could never sign for.
 
 ### Fixed
 - A command proxy that logs in first (an expired SSO session, a browser URL) no longer fails the dial; its output shows on the connect card (#223, reported by @guptakanishka90).

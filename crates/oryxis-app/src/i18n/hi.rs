@@ -2337,6 +2337,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "वॉल्ट में अभी किसी भी कुंजी के साथ प्रमाणपत्र संलग्न नहीं है।",
         "cert_key_no_cert_hint" => "चयनित कुंजी के साथ कोई प्रमाणपत्र संलग्न नहीं है।",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "सुरक्षा कुंजी",
+        "security_key_help" => "केवल यही हार्डवेयर कुंजी उपयोग होगी; एजेंट, दूसरी कुंजी या पासवर्ड फ़ॉलबैक नहीं होगा। कुंजी न मिलने या स्पर्श अस्वीकार होने पर कनेक्शन विफल होगा।",
+        "security_key_none_imported" => "वॉल्ट में अभी कोई सुरक्षा कुंजी नहीं है। ssh-keygen द्वारा बनाई गई id_ed25519_sk फ़ाइल आयात करें।",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "सार्वजनिक कुंजी इंपोर्ट करें",
         "key_badge_security_key" => "सुरक्षा कुंजी",

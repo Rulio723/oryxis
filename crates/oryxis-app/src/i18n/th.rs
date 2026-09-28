@@ -2338,6 +2338,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "ยังไม่มีกุญแจใน Vault ที่มีใบรับรองแนบอยู่",
         "cert_key_no_cert_hint" => "กุญแจที่เลือกไม่มีใบรับรองแนบอยู่",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "กุญแจความปลอดภัย",
+        "security_key_help" => "จะใช้เฉพาะกุญแจฮาร์ดแวร์นี้ โดยไม่มี agent กุญแจอื่น หรือรหัสผ่านสำรอง หากไม่พบกุญแจหรือปฏิเสธการสัมผัส การเชื่อมต่อจะล้มเหลว",
+        "security_key_none_imported" => "ยังไม่มีกุญแจความปลอดภัยในห้องนิรภัย ให้นำเข้าไฟล์ id_ed25519_sk ที่สร้างโดย ssh-keygen",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "นำเข้ากุญแจสาธารณะ",
         "key_badge_security_key" => "กุญแจความปลอดภัย",

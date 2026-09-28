@@ -2318,6 +2318,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "لا يوجد بعد أي مفتاح في الخزنة بشهادة مرفقة.",
         "cert_key_no_cert_hint" => "المفتاح المحدد ليست له شهادة مرفقة.",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "مفتاح أمان",
+        "security_key_help" => "سيُعرض مفتاح العتاد هذا فقط، بلا وكيل أو مفتاح آخر أو رجوع إلى كلمة المرور. إذا غاب المفتاح أو رُفض اللمس فسيفشل الاتصال.",
+        "security_key_none_imported" => "لا يوجد مفتاح أمان في الخزنة بعد. استورد ملف id_ed25519_sk الذي أنشأه ssh-keygen.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "استيراد المفتاح العام",
         "key_badge_security_key" => "مفتاح أمان",

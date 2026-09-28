@@ -2299,6 +2299,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "La clave pública no coincide con la clave privada.",
         "cert_no_keys_hint" => "Ninguna clave de la bóveda tiene todavía un certificado adjunto.",
         "cert_key_no_cert_hint" => "La clave seleccionada no tiene ningún certificado adjunto.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Clave de seguridad",
+        "security_key_help" => "Solo se ofrecerá esta clave de hardware: sin agente, otra clave ni contraseña alternativa. Si falta la clave o se rechaza el toque, la conexión fallará.",
+        "security_key_none_imported" => "Aún no hay ninguna clave de seguridad en la bóveda. Importe el archivo id_ed25519_sk creado por ssh-keygen.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importar clave pública",
         "key_badge_security_key" => "Clave de seguridad",

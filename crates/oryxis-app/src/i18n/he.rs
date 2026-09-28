@@ -2337,6 +2337,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "אין עדיין מפתח בכספת עם תעודה מצורפת.",
         "cert_key_no_cert_hint" => "למפתח שנבחר אין תעודה מצורפת.",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "מפתח אבטחה",
+        "security_key_help" => "רק מפתח החומרה הזה יוצע: ללא סוכן, מפתח אחר או סיסמת גיבוי. אם המפתח חסר או שהמגע נדחה, החיבור ייכשל.",
+        "security_key_none_imported" => "עדיין אין מפתח אבטחה בכספת. יש לייבא את הקובץ id_ed25519_sk שיצר ssh-keygen.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "ייבוא מפתח ציבורי",
         "key_badge_security_key" => "מפתח אבטחה",

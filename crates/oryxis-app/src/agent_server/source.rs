@@ -365,16 +365,17 @@ impl AgentKeySource for VaultKeySource {
             .list_keys()
             .unwrap_or_default()
             .into_iter()
-            // Security-key rows (B3) are public-only: signing happens on
-            // the hardware token via the EXTERNAL agent, so listing them
-            // here would advertise identities this agent can never sign
-            // for (the `sign` lookup below would hit a NULL private).
-            // Only rows we actually hold a private for: security-key /
-            // public-only rows (NULL private) can never be signed here.
-            // Gating on `has_private` (not just the sk- algorithm) keeps
-            // list() symmetric with sign() below and covers a plain
-            // public-only import too.
-            .filter(|k| k.expose_via_agent && k.has_private)
+            // Security-key rows are never served here, whether or not
+            // they hold material. The app signs with a token natively
+            // (the stored blob is a FIDO2 credential handle, not a
+            // scalar), so a `has_private` row can still be one this
+            // agent must not advertise: `sign` below would hand the
+            // handle to a software signer. The algorithm check is what
+            // keeps `list()` symmetric with `sign()`; `has_private`
+            // additionally covers a plain public-only import.
+            .filter(|k| {
+                k.expose_via_agent && k.has_private && !k.algorithm.is_security_key()
+            })
             .filter_map(|k| {
                 Self::blob_of(&k.public_key).map(|blob| AgentPublicKey {
                     blob,
@@ -413,6 +414,7 @@ impl AgentKeySource for VaultKeySource {
             .find(|k| {
                 k.expose_via_agent
                     && k.has_private
+                    && !k.algorithm.is_security_key()
                     && Self::blob_of(&k.public_key).as_deref() == Some(key_blob)
             })
             .ok_or(AgentSignError::UnknownKey)?;

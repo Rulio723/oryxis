@@ -222,6 +222,15 @@ pub fn import_key(
 /// OpenSSH-encoded PEM, then build the resulting `GeneratedKey`.
 /// Returns an error for algorithms we don't claim to support, rather
 /// than silently mislabeling them.
+///
+/// Security keys take this path too, and that is deliberate. An
+/// `id_ed25519_sk` file is an OpenSSH *private* key file whose body is
+/// not a private scalar but a FIDO2 credential handle plus the
+/// application string and flags; the Ed25519 scalar never leaves the
+/// token. Storing it here is what lets the app sign natively later —
+/// but it is emphatically not software key material, so the row is
+/// marked as such (see `expose_via_agent` below) and every consumer
+/// that assumes a scalar must keep its hands off it.
 fn finalize(label: &str, private_key: PrivateKey) -> Result<GeneratedKey, VaultError> {
     let public_key = private_key.public_key();
     let fingerprint = public_key.fingerprint(HashAlg::Sha256).to_string();
@@ -246,6 +255,8 @@ fn finalize(label: &str, private_key: PrivateKey) -> Result<GeneratedKey, VaultE
             ssh_key::EcdsaCurve::NistP384 => KeyAlgorithm::EcdsaP384,
             ssh_key::EcdsaCurve::NistP521 => KeyAlgorithm::EcdsaP521,
         },
+        Algorithm::SkEd25519 => KeyAlgorithm::SkEd25519,
+        Algorithm::SkEcdsaSha2NistP256 => KeyAlgorithm::SkEcdsaP256,
         other => {
             return Err(VaultError::UnsupportedKeyKind(other.as_str().to_string()));
         }
@@ -259,6 +270,14 @@ fn finalize(label: &str, private_key: PrivateKey) -> Result<GeneratedKey, VaultE
     let mut key = SshKey::new(label, algorithm);
     key.fingerprint = fingerprint;
     key.public_key = public_key_str;
+    // A security-key row is stored here so the app can drive the token
+    // itself, but our ssh-agent cannot: `sign` would have to hand a
+    // credential handle to a software signer. Leave it out of the
+    // agent's offering, and the user can still enable it by hand if a
+    // future agent learns the CTAP2 path.
+    if key.algorithm.is_security_key() {
+        key.expose_via_agent = false;
+    }
 
     Ok(GeneratedKey { key, private_pem })
 }
@@ -400,6 +419,137 @@ mod tests {
         let key = import_public_key("plain-pub", &generated.key.public_key).unwrap();
         assert_eq!(key.algorithm, KeyAlgorithm::Ed25519);
         assert_eq!(key.fingerprint, generated.key.fingerprint);
+    }
+
+    // -----------------------------------------------------------------------
+    // Security-key handles (native FIDO2)
+    // -----------------------------------------------------------------------
+
+    /// The flags `ssh-keygen -O` can set, mirrored from `sk-api.h` so the
+    /// assertions below read as protocol rather than magic numbers.
+    const SK_USER_PRESENCE: u8 = 0x01;
+    const SK_RESIDENT: u8 = 0x20;
+
+    /// Encode an `id_ed25519_sk` file the way `ssh-keygen -t ed25519-sk`
+    /// does. The body is a credential handle plus the application string
+    /// and flags — there is no Ed25519 scalar in it at all, which is the
+    /// whole point of the format and the reason a "private key import"
+    /// must not be treated as software key material.
+    fn sk_ed25519_private(public: [u8; 32], flags: u8, handle: &[u8]) -> String {
+        use ssh_key::private::{KeypairData, SkEd25519};
+        use ssh_key::public::{Ed25519PublicKey, SkEd25519 as SkEd25519Public};
+
+        let public = SkEd25519Public::new(Ed25519PublicKey(public), "ssh:");
+        let keypair = SkEd25519::new(public, flags, handle.to_vec())
+            .expect("handle fits the file's one-byte length");
+        PrivateKey::new(KeypairData::SkEd25519(keypair), "user@example.com")
+            .expect("not encrypted")
+            .to_openssh(ssh_key::LineEnding::LF)
+            .expect("encodes")
+            .to_string()
+    }
+
+    /// Importing an `id_ed25519_sk` file must keep the credential handle
+    /// byte for byte: that text is the only thing that can drive the token
+    /// later, and it is what distinguishes "native FIDO2" from "we kept
+    /// the public half and hoped an external agent was running".
+    #[test]
+    fn import_security_key_keeps_the_credential_handle() {
+        let handle = [0x11u8, 0x22, 0x33, 0x44, 0x55];
+        let pem = sk_ed25519_private([7u8; 32], SK_USER_PRESENCE, &handle);
+
+        let imported = import_key("yubi", &pem, None).unwrap();
+        assert_eq!(imported.key.algorithm, KeyAlgorithm::SkEd25519);
+        assert!(imported.key.algorithm.is_security_key());
+        assert!(
+            imported.key.public_key.starts_with("sk-ssh-ed25519@openssh.com "),
+            "{}",
+            imported.key.public_key
+        );
+        assert!(imported.key.fingerprint.starts_with("SHA256:"));
+
+        let reparsed = PrivateKey::from_openssh(&imported.private_pem).unwrap();
+        assert_eq!(reparsed.algorithm(), Algorithm::SkEd25519);
+        let sk = reparsed
+            .key_data()
+            .sk_ed25519()
+            .expect("the stored text is still a security-key handle");
+        assert_eq!(sk.key_handle(), handle);
+        assert_eq!(sk.flags(), SK_USER_PRESENCE);
+        assert_eq!(sk.public().application(), "ssh:");
+        // The public line we stored describes exactly the stored handle's
+        // public half, so a fingerprint match on the server is meaningful.
+        assert_eq!(
+            reparsed.public_key().fingerprint(HashAlg::Sha256).to_string(),
+            imported.key.fingerprint
+        );
+    }
+
+    /// A resident (discoverable) credential has an empty handle; the
+    /// import must not confuse that with "no key material" and must keep
+    /// the resident flag, since that decides whether an allow-list is sent.
+    #[test]
+    fn import_security_key_keeps_a_resident_credential_flag() {
+        let pem = sk_ed25519_private([9u8; 32], SK_USER_PRESENCE | SK_RESIDENT, &[]);
+        let imported = import_key("resident", &pem, None).unwrap();
+        assert_eq!(imported.key.algorithm, KeyAlgorithm::SkEd25519);
+
+        let reparsed = PrivateKey::from_openssh(&imported.private_pem).unwrap();
+        let sk = reparsed.key_data().sk_ed25519().unwrap();
+        assert!(sk.key_handle().is_empty());
+        assert_eq!(sk.flags() & SK_RESIDENT, SK_RESIDENT);
+    }
+
+    /// A security key is stored so the app can drive the token itself, but
+    /// our ssh-agent cannot sign for one: it would have to feed a
+    /// credential handle to a software signer. The row must therefore
+    /// arrive with the agent switch off, or the agent would advertise an
+    /// identity it can never complete a signature for.
+    #[test]
+    fn import_security_key_is_not_offered_to_the_agent() {
+        let pem = sk_ed25519_private([1u8; 32], SK_USER_PRESENCE, &[1, 2, 3]);
+        let imported = import_key("yubi", &pem, None).unwrap();
+        assert!(!imported.key.expose_via_agent);
+    }
+
+    /// `sk-ecdsa-sha2-nistp256` is the other security-key family. Phase 1
+    /// authenticates with Ed25519 only, but the import must still label it
+    /// honestly instead of rejecting the file outright — a user pasting
+    /// their key should learn *why* it will not sign, not lose the key.
+    #[test]
+    fn import_security_key_maps_the_ecdsa_family() {
+        use ssh_key::private::{KeypairData, SkEcdsaSha2NistP256};
+
+        let public = ssh_key::PublicKey::from_openssh(SK_ECDSA_P256_PUB).unwrap();
+        let sk_public = public.key_data().sk_ecdsa_p256().unwrap().clone();
+        let keypair = SkEcdsaSha2NistP256::new(sk_public, SK_USER_PRESENCE, vec![4, 5, 6])
+            .expect("handle fits");
+        let pem = PrivateKey::new(
+            KeypairData::SkEcdsaSha2NistP256(keypair),
+            "user@example.com",
+        )
+        .unwrap()
+        .to_openssh(ssh_key::LineEnding::LF)
+        .unwrap()
+        .to_string();
+
+        let imported = import_key("yubi-ec", &pem, None).unwrap();
+        assert_eq!(imported.key.algorithm, KeyAlgorithm::SkEcdsaP256);
+        assert!(imported.key.algorithm.is_security_key());
+        assert!(!imported.key.expose_via_agent);
+        // Same key as the public-line import of the same fixture.
+        let from_public = import_public_key("yubi-ec-pub", SK_ECDSA_P256_PUB).unwrap();
+        assert_eq!(imported.key.fingerprint, from_public.fingerprint);
+    }
+
+    /// A plain Ed25519 private key must not be mistaken for a security
+    /// key: it goes through the same `finalize`, and the agent switch
+    /// must stay on for it.
+    #[test]
+    fn a_plain_key_is_still_offered_to_the_agent() {
+        let generated = generate_ed25519("plain").unwrap();
+        assert!(generated.key.expose_via_agent);
+        assert!(!generated.key.algorithm.is_security_key());
     }
 
     #[test]

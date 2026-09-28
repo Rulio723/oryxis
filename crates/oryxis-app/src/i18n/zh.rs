@@ -2299,6 +2299,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "保险库中还没有附加了证书的密钥。",
         "cert_key_no_cert_hint" => "所选密钥没有附加证书。",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "安全密钥",
+        "security_key_help" => "仅尝试此硬件密钥，不使用代理、其他密钥或密码回退。密钥缺失或拒绝触摸时，连接将失败。",
+        "security_key_none_imported" => "保险库中还没有安全密钥。请导入 ssh-keygen 生成的 id_ed25519_sk 文件。",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "导入公钥",
         "key_badge_security_key" => "安全密钥",

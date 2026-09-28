@@ -2319,6 +2319,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "هنوز هیچ کلیدی در صندوقچه گواهی پیوست‌شده ندارد.",
         "cert_key_no_cert_hint" => "کلید انتخاب‌شده گواهی پیوست‌شده ندارد.",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "کلید امنیتی",
+        "security_key_help" => "فقط همین کلید سخت‌افزاری ارائه می‌شود؛ بدون عامل، کلید دیگر یا بازگشت به گذرواژه. اگر کلید موجود نباشد یا لمس رد شود، اتصال ناموفق خواهد بود.",
+        "security_key_none_imported" => "هنوز کلید امنیتی در خزانه نیست. فایل id_ed25519_sk ساخته‌شده با ssh-keygen را وارد کنید.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "وارد کردن کلید عمومی",
         "key_badge_security_key" => "کلید امنیتی",

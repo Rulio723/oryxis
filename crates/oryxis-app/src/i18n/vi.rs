@@ -2332,6 +2332,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "Chưa có khóa nào trong kho được đính kèm chứng chỉ.",
         "cert_key_no_cert_hint" => "Khóa đã chọn không có chứng chỉ đính kèm.",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Khóa bảo mật",
+        "security_key_help" => "Chỉ khóa phần cứng này được sử dụng: không có agent, khóa khác hoặc mật khẩu dự phòng. Nếu thiếu khóa hoặc từ chối chạm, kết nối sẽ thất bại.",
+        "security_key_none_imported" => "Chưa có khóa bảo mật trong kho. Hãy nhập tệp id_ed25519_sk do ssh-keygen tạo.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Nhập khóa công khai",
         "key_badge_security_key" => "Khóa bảo mật",

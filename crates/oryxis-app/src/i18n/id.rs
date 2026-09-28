@@ -2332,6 +2332,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "Belum ada kunci di vault yang memiliki sertifikat terlampir.",
         "cert_key_no_cert_hint" => "Kunci yang dipilih tidak memiliki sertifikat terlampir.",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Kunci keamanan",
+        "security_key_help" => "Hanya kunci perangkat keras ini yang ditawarkan: tanpa agen, kunci lain, atau sandi cadangan. Jika kunci tidak ada atau sentuhan ditolak, koneksi akan gagal.",
+        "security_key_none_imported" => "Belum ada kunci keamanan di brankas. Impor berkas id_ed25519_sk yang dibuat oleh ssh-keygen.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Impor kunci publik",
         "key_badge_security_key" => "Kunci keamanan",

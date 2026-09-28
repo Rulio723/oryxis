@@ -2299,6 +2299,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "Открытый ключ не соответствует закрытому ключу.",
         "cert_no_keys_hint" => "В хранилище пока нет ключей с прикреплённым сертификатом.",
         "cert_key_no_cert_hint" => "У выбранного ключа нет прикреплённого сертификата.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Ключ безопасности",
+        "security_key_help" => "Будет предложен только этот аппаратный ключ: без агента, другого ключа и резервного пароля. Если ключ отсутствует или касание отклонено, подключение завершится ошибкой.",
+        "security_key_none_imported" => "В хранилище пока нет ключа безопасности. Импортируйте файл id_ed25519_sk, созданный ssh-keygen.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Импорт открытого ключа",
         "key_badge_security_key" => "Ключ безопасности",

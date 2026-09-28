@@ -2332,6 +2332,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "볼트에 인증서가 첨부된 키가 아직 없습니다.",
         "cert_key_no_cert_hint" => "선택한 키에 첨부된 인증서가 없습니다.",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "보안 키",
+        "security_key_help" => "이 하드웨어 키만 사용하며 에이전트, 다른 키 또는 암호로 대체하지 않습니다. 키가 없거나 터치가 거부되면 연결에 실패합니다.",
+        "security_key_none_imported" => "보관소에 보안 키가 없습니다. ssh-keygen이 만든 id_ed25519_sk 파일을 가져오세요.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "공개 키 가져오기",
         "key_badge_security_key" => "보안 키",

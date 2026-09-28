@@ -699,6 +699,16 @@ pub enum AuthMethod {
     /// and `Auto` remains the smart path (cert, then bare key, then the
     /// other methods).
     Certificate,
+    /// Hardware-only publickey auth: the selected FIDO2 security key
+    /// (`sk-ssh-ed25519@openssh.com`) is offered and nothing else. No
+    /// agent sweep, no other key, no password or keyboard-interactive
+    /// fallback, no interactive prompt. A missing token, a declined
+    /// touch or a server rejection is a hard auth error.
+    ///
+    /// This is the mode that makes "the key IS the second factor" true:
+    /// every other method can, by design, end up authenticating with
+    /// something that is not the token.
+    SecurityKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

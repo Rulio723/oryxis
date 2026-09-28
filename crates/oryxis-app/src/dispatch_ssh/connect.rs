@@ -469,6 +469,9 @@ impl Oryxis {
                         "keyboard-interactive"
                     }
                     oryxis_core::models::connection::AuthMethod::Certificate => "certificate",
+                    oryxis_core::models::connection::AuthMethod::SecurityKey => {
+                        "hardware security key"
+                    }
                 }
                 .to_string();
                 let keepalive = self.effective_keepalive(&conn);

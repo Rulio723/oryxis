@@ -2298,6 +2298,10 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "La clé publique ne correspond pas à la clé privée.",
         "cert_no_keys_hint" => "Aucune clé du coffre n'a encore de certificat joint.",
         "cert_key_no_cert_hint" => "La clé sélectionnée n'a pas de certificat joint.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Clé de sécurité",
+        "security_key_help" => "Seule cette clé matérielle sera proposée : aucun agent, aucune autre clé et aucun mot de passe de secours. Si la clé est absente ou si le toucher est refusé, la connexion échoue.",
+        "security_key_none_imported" => "Aucune clé de sécurité n'est encore dans le coffre. Importez le fichier id_ed25519_sk créé par ssh-keygen.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importer une clé publique",
         "key_badge_security_key" => "Clé de sécurité",

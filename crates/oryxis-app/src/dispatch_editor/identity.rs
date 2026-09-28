@@ -83,16 +83,32 @@ impl Oryxis {
                 // Localized (or English) label -> enum, shared with the
                 // Settings default-auth picker.
                 self.editor_form.auth_method = crate::util::auth_method_from_label(&v);
-                // Certificate lists only keys that carry a cert: drop a
-                // selection that is no longer offerable and rebuild the
-                // combo with the filtered (or restored) option list.
-                if self.editor_form.auth_method == AuthMethod::Certificate
-                    && let Some(sel) = self.editor_form.selected_key.as_deref()
-                    && !self
-                        .keys
-                        .iter()
-                        .any(|k| k.label == sel && k.certificate.is_some())
-                {
+                // Two methods list only a subset of the vault: `Certificate`
+                // narrows to keys carrying a cert, `SecurityKey` to hardware
+                // keys. A pick the new method cannot use is dropped rather
+                // than carried into a host that would then fail at connect
+                // time — and the combo is rebuilt either way, since the
+                // option list itself changed.
+                let still_offerable = match self.editor_form.auth_method {
+                    AuthMethod::Certificate => {
+                        self.editor_form.selected_key.as_deref().is_none_or(|sel| {
+                            self.keys
+                                .iter()
+                                .any(|k| k.label == sel && k.certificate.is_some())
+                        })
+                    }
+                    AuthMethod::SecurityKey => {
+                        self.editor_form.selected_key.as_deref().is_none_or(|sel| {
+                            self.keys.iter().any(|k| {
+                                k.label == sel
+                                    && k.algorithm.is_security_key()
+                                    && k.has_private
+                            })
+                        })
+                    }
+                    _ => true,
+                };
+                if !still_offerable {
                     self.editor_form.selected_key = None;
                 }
                 self.reset_editor_key_combo();

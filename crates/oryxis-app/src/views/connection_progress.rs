@@ -3,10 +3,12 @@
 
 use iced::alignment::Horizontal;
 use iced::border::Radius;
-use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input, Space};
+use iced::widget::{
+    Space, button, column, container, pick_list, row, scrollable, text, text_input,
+};
 use iced::{Background, Border, Color, Element, Length, Padding};
 
-use crate::app::{SshMessage, Message, Oryxis};
+use crate::app::{Message, Oryxis, SshMessage};
 use crate::state::ConnectionStep;
 use crate::theme::OryxisColors;
 
@@ -16,9 +18,9 @@ use crate::theme::OryxisColors;
 /// resolved by the caller (they override the step's own tone).
 fn step_color(step: ConnectionStep) -> Color {
     match step {
-        ConnectionStep::Starting
-        | ConnectionStep::Connecting
-        | ConnectionStep::OpeningSession => OryxisColors::t().accent,
+        ConnectionStep::Starting | ConnectionStep::Connecting | ConnectionStep::OpeningSession => {
+            OryxisColors::t().accent
+        }
         ConnectionStep::Handshake | ConnectionStep::Authenticated => OryxisColors::t().success,
         ConnectionStep::Authenticating => OryxisColors::t().warning,
     }
@@ -31,9 +33,10 @@ fn step_glyph(step: ConnectionStep, color: Color) -> Element<'static, Message> {
     match step {
         ConnectionStep::Starting => iced_fonts::lucide::play().size(15).color(color).into(),
         ConnectionStep::Connecting => iced_fonts::lucide::plug().size(15).color(color).into(),
-        ConnectionStep::Handshake => {
-            iced_fonts::lucide::shield_check().size(15).color(color).into()
-        }
+        ConnectionStep::Handshake => iced_fonts::lucide::shield_check()
+            .size(15)
+            .color(color)
+            .into(),
         ConnectionStep::Authenticating => {
             iced_fonts::lucide::key_round().size(15).color(color).into()
         }
@@ -82,16 +85,13 @@ impl Oryxis {
     /// host's known hostname / username literally, which catches plain DNS
     /// names the regex can't. Returns the input unchanged when off or while
     /// the eye toggle reveals.
-    fn redact_progress(
-        &self,
-        progress: &crate::state::ConnectionProgress,
-        s: &str,
-    ) -> String {
+    fn redact_progress(&self, progress: &crate::state::ConnectionProgress, s: &str) -> String {
         if !self.progress_privacy_on(progress) || self.privacy.revealed {
             return s.to_string();
         }
         let conn = self.progress_connection(progress);
-        let mut out = crate::widgets::redact_for_display(s, &self.privacy_terms(), self.privacy_classes());
+        let mut out =
+            crate::widgets::redact_for_display(s, &self.privacy_terms(), self.privacy_classes());
         if let Some(c) = conn {
             if !c.hostname.is_empty() {
                 out = out.replace(&c.hostname, &crate::widgets::mask_blocks(&c.hostname));
@@ -136,7 +136,12 @@ impl Oryxis {
         el: Element<'a, Message>,
     ) -> Element<'a, Message> {
         if owned {
-            self.modal_nav_slot(crate::keynav::RowAction::activate(msg), radius, contrast, el)
+            self.modal_nav_slot(
+                crate::keynav::RowAction::activate(msg),
+                radius,
+                contrast,
+                el,
+            )
         } else {
             el
         }
@@ -183,7 +188,13 @@ impl Oryxis {
             .and_then(crate::widgets::parse_hex_color)
             .unwrap_or(icon_color);
         let glyph_el: Element<'_, Message> = glyph.view(20.0, Color::WHITE);
-        let badge = crate::widgets::host_icon(badge_style, badge_color, &progress.label, Some(glyph_el), 40.0);
+        let badge = crate::widgets::host_icon(
+            badge_style,
+            badge_color,
+            &progress.label,
+            Some(glyph_el),
+            40.0,
+        );
 
         let mut header_children: Vec<Element<'_, Message>> = vec![
             badge,
@@ -192,10 +203,12 @@ impl Oryxis {
                 // A quick-connect label embeds `user@host`, so the label
                 // is redacted like every other string on this screen.
                 text(self.redact_progress(progress, &progress.label))
-                    .size(16).color(OryxisColors::t().text_primary),
+                    .size(16)
+                    .color(OryxisColors::t().text_primary),
                 Space::new().height(2),
                 text(self.redact_progress(progress, &progress.hostname))
-                    .size(12).color(OryxisColors::t().text_muted),
+                    .size(12)
+                    .color(OryxisColors::t().text_muted),
             ]
             .width(Length::Fill)
             .align_x(crate::widgets::dir_align_x())
@@ -218,15 +231,23 @@ impl Oryxis {
         // ad-hoc host exists nowhere else, so mid-prompt is exactly when
         // a typo'd user/port needs fixing; the handler cancels the
         // in-flight attempt and opens the temporary-host edit flow.
-        let is_quick_origin =
-            matches!(progress.origin, crate::state::ProgressOrigin::Quick(_));
+        let is_quick_origin = matches!(progress.origin, crate::state::ProgressOrigin::Quick(_));
         if failed || is_quick_origin {
             if self.progress_privacy_on(progress) {
                 header_children.push(Space::new().width(8).into());
             }
             let edit_btn: Element<'_, Message> = button(
-                container(text(crate::i18n::t("edit_host")).size(13).color(OryxisColors::t().text_primary))
-                    .padding(Padding { top: 8.0, right: 16.0, bottom: 8.0, left: 16.0 }),
+                container(
+                    text(crate::i18n::t("edit_host"))
+                        .size(13)
+                        .color(OryxisColors::t().text_primary),
+                )
+                .padding(Padding {
+                    top: 8.0,
+                    right: 16.0,
+                    bottom: 8.0,
+                    left: 16.0,
+                }),
             )
             .on_press(Message::Ssh(SshMessage::SshEditFromProgress))
             .style(|_, status| button::Style {
@@ -234,7 +255,10 @@ impl Oryxis {
                     button::Status::Hovered | button::Status::Pressed => OryxisColors::t().bg_hover,
                     _ => OryxisColors::t().bg_surface,
                 })),
-                border: Border { radius: Radius::from(8.0), ..Default::default() },
+                border: Border {
+                    radius: Radius::from(8.0),
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .into();
@@ -247,8 +271,14 @@ impl Oryxis {
             ));
         }
 
-        let header = container(crate::widgets::dir_row(header_children).align_y(iced::Alignment::Center))
-            .padding(Padding { top: 24.0, right: 0.0, bottom: 16.0, left: 0.0 });
+        let header =
+            container(crate::widgets::dir_row(header_children).align_y(iced::Alignment::Center))
+                .padding(Padding {
+                    top: 24.0,
+                    right: 0.0,
+                    bottom: 16.0,
+                    left: 0.0,
+                });
 
         // Pre-auth banner (RFC 4252 §5.4): legal notices / MFA
         // instructions the server sent before authentication. Rendered
@@ -266,9 +296,7 @@ impl Oryxis {
                     Space::new().height(10),
                     container(
                         iced::widget::scrollable(
-                            text(body)
-                                .size(12)
-                                .color(OryxisColors::t().text_secondary),
+                            text(body).size(12).color(OryxisColors::t().text_secondary),
                         )
                         .width(Length::Fill),
                     )
@@ -311,8 +339,8 @@ impl Oryxis {
             let box_h = (body.lines().count() as f32 * 17.0 + 22.0).min(140.0);
             let mut links: Vec<Element<'_, Message>> = Vec::new();
             for url in proxy_output_urls(&progress.proxy_output) {
-                let label = crate::i18n::t("proxy_open_link_host")
-                    .replace("{host}", &url_host_label(&url));
+                let label =
+                    crate::i18n::t("proxy_open_link_host").replace("{host}", &url_host_label(&url));
                 let msg = Message::OpenUrl(url);
                 let btn = crate::widgets::styled_button_owned(
                     label,
@@ -361,7 +389,11 @@ impl Oryxis {
         // connect_anim_tick subscription (only alive while connecting).
         let tick = self.connect_anim_tick;
         let phase = ((tick % 8) as f32) / 8.0;
-        let pulse = if phase < 0.5 { phase * 2.0 } else { (1.0 - phase) * 2.0 };
+        let pulse = if phase < 0.5 {
+            phase * 2.0
+        } else {
+            (1.0 - phase) * 2.0
+        };
 
         // A batch connect still owes dials (issue #230): say how many and
         // offer to drop them, in every state of the card, so a batch of
@@ -388,9 +420,13 @@ impl Oryxis {
                     OryxisColors::t().bg_hover,
                 ),
             );
-            crate::widgets::dir_row(vec![queued.into(), Space::new().width(Length::Fill).into(), cancel])
-                .align_y(iced::Alignment::Center)
-                .into()
+            crate::widgets::dir_row(vec![
+                queued.into(),
+                Space::new().width(Length::Fill).into(),
+                cancel,
+            ])
+            .align_y(iced::Alignment::Center)
+            .into()
         });
 
         // Host key verification or normal status/log timeline.
@@ -436,7 +472,9 @@ impl Oryxis {
             ];
             for off in &legacy.server_offers {
                 body_col = body_col.push(
-                    text(format!("  {off}")).size(12).color(OryxisColors::t().text_primary),
+                    text(format!("  {off}"))
+                        .size(12)
+                        .color(OryxisColors::t().text_primary),
                 );
             }
             let body: Element<'_, Message> = body_col.into();
@@ -508,7 +546,11 @@ impl Oryxis {
 
             if !kbi.instructions.trim().is_empty() {
                 body_col = body_col
-                    .push(text(self.redact_progress(progress, &kbi.instructions)).size(13).color(OryxisColors::t().text_secondary))
+                    .push(
+                        text(self.redact_progress(progress, &kbi.instructions))
+                            .size(13)
+                            .color(OryxisColors::t().text_secondary),
+                    )
                     .push(Space::new().height(12));
             }
 
@@ -530,7 +572,11 @@ impl Oryxis {
                     input = input.secure(true);
                 }
                 body_col = body_col
-                    .push(text(prompt_label.clone()).size(12).color(OryxisColors::t().text_muted))
+                    .push(
+                        text(prompt_label.clone())
+                            .size(12)
+                            .color(OryxisColors::t().text_muted),
+                    )
                     .push(Space::new().height(4))
                     .push(input)
                     .push(Space::new().height(12));
@@ -547,17 +593,34 @@ impl Oryxis {
             let body: Element<'_, Message> = container(body_col)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .padding(Padding { top: 8.0, right: 16.0, bottom: 8.0, left: 16.0 })
+                .padding(Padding {
+                    top: 8.0,
+                    right: 16.0,
+                    bottom: 8.0,
+                    left: 16.0,
+                })
                 .style(|_| container::Style {
                     background: Some(Background::Color(OryxisColors::t().bg_sidebar)),
-                    border: Border { radius: Radius::from(10.0), ..Default::default() },
+                    border: Border {
+                        radius: Radius::from(10.0),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 })
                 .into();
 
             let cancel_btn = button(
-                container(text(crate::i18n::t("cancel")).size(13).color(OryxisColors::t().text_primary))
-                    .padding(Padding { top: 10.0, right: 24.0, bottom: 10.0, left: 24.0 }),
+                container(
+                    text(crate::i18n::t("cancel"))
+                        .size(13)
+                        .color(OryxisColors::t().text_primary),
+                )
+                .padding(Padding {
+                    top: 10.0,
+                    right: 24.0,
+                    bottom: 10.0,
+                    left: 24.0,
+                }),
             )
             .on_press(Message::Ssh(SshMessage::SshKbiCancel))
             .style(|_, status| button::Style {
@@ -565,7 +628,10 @@ impl Oryxis {
                     button::Status::Hovered | button::Status::Pressed => OryxisColors::t().bg_hover,
                     _ => OryxisColors::t().bg_surface,
                 })),
-                border: Border { radius: Radius::from(8.0), ..Default::default() },
+                border: Border {
+                    radius: Radius::from(8.0),
+                    ..Default::default()
+                },
                 ..Default::default()
             });
 
@@ -581,7 +647,12 @@ impl Oryxis {
                             })
                             .color(fg),
                     )
-                    .padding(Padding { top: 10.0, right: 24.0, bottom: 10.0, left: 24.0 }),
+                    .padding(Padding {
+                        top: 10.0,
+                        right: 24.0,
+                        bottom: 10.0,
+                        left: 24.0,
+                    }),
                 )
                 .on_press(Message::Ssh(SshMessage::SshKbiSubmit))
                 .style(|_, status| button::Style {
@@ -595,16 +666,18 @@ impl Oryxis {
                         ),
                         _ => OryxisColors::t().accent,
                     })),
-                    border: Border { radius: Radius::from(8.0), ..Default::default() },
+                    border: Border {
+                        radius: Radius::from(8.0),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 })
             };
 
-            let btm: Element<'_, Message> = row![
-                cancel_btn,
-                Space::new().width(Length::Fill),
-                submit_btn,
-            ].align_y(iced::Alignment::Center).into();
+            let btm: Element<'_, Message> =
+                row![cancel_btn, Space::new().width(Length::Fill), submit_btn,]
+                    .align_y(iced::Alignment::Center)
+                    .into();
 
             (status, body, btm)
         } else if let Some(ref query) = self.pending_proxy_command {
@@ -622,18 +695,24 @@ impl Oryxis {
                 progress,
                 &format!("{}:{}", query.target_host, query.target_port),
             );
-            let body: Element<'_, Message> = container(
-                column![
-                    Space::new().height(8),
-                    crate::views::proxy_command::proxy_command_body(query, &endpoint),
-                ],
-            )
+            let body: Element<'_, Message> = container(column![
+                Space::new().height(8),
+                crate::views::proxy_command::proxy_command_body(query, &endpoint),
+            ])
             .width(Length::Fill)
             .height(Length::Fill)
-            .padding(Padding { top: 8.0, right: 16.0, bottom: 8.0, left: 16.0 })
+            .padding(Padding {
+                top: 8.0,
+                right: 16.0,
+                bottom: 8.0,
+                left: 16.0,
+            })
             .style(|_| container::Style {
                 background: Some(Background::Color(OryxisColors::t().bg_sidebar)),
-                border: Border { radius: Radius::from(10.0), ..Default::default() },
+                border: Border {
+                    radius: Radius::from(10.0),
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .into();
@@ -647,48 +726,94 @@ impl Oryxis {
             } else {
                 crate::i18n::t("hk_unknown_title")
             };
-            let question_color = if is_changed { OryxisColors::t().error } else { OryxisColors::t().warning };
+            let question_color = if is_changed {
+                OryxisColors::t().error
+            } else {
+                OryxisColors::t().warning
+            };
 
-            let status: Element<'_, Message> = text(question_text).size(14).color(question_color).into();
+            let status: Element<'_, Message> =
+                text(question_text).size(14).color(question_color).into();
 
             let mut body_col = column![];
 
             if is_changed {
                 body_col = body_col
                     .push(Space::new().height(8))
-                    .push(text(crate::i18n::t("hk_warning_desc")).size(13).color(OryxisColors::t().error))
+                    .push(
+                        text(crate::i18n::t("hk_warning_desc"))
+                            .size(13)
+                            .color(OryxisColors::t().error),
+                    )
                     .push(Space::new().height(12));
-                if let oryxis_ssh::HostKeyStatus::Changed { ref old_fingerprint } = query.status {
+                if let oryxis_ssh::HostKeyStatus::Changed {
+                    ref old_fingerprint,
+                } = query.status
+                {
                     body_col = body_col
-                        .push(text(format!("{} {}", crate::i18n::t("hk_old_fingerprint"), old_fingerprint)).size(12).color(OryxisColors::t().text_muted))
+                        .push(
+                            text(format!(
+                                "{} {}",
+                                crate::i18n::t("hk_old_fingerprint"),
+                                old_fingerprint
+                            ))
+                            .size(12)
+                            .color(OryxisColors::t().text_muted),
+                        )
                         .push(Space::new().height(8));
                 }
             } else {
-                body_col = body_col
-                    .push(Space::new().height(8))
-                    .push(text(
-                        crate::i18n::t("hk_unknown_desc")
-                            .replace("{host}", &self.redact_progress(progress, &query.hostname)),
-                    ).size(13).color(OryxisColors::t().text_secondary))
-                    .push(Space::new().height(12));
+                body_col =
+                    body_col
+                        .push(Space::new().height(8))
+                        .push(
+                            text(crate::i18n::t("hk_unknown_desc").replace(
+                                "{host}",
+                                &self.redact_progress(progress, &query.hostname),
+                            ))
+                            .size(13)
+                            .color(OryxisColors::t().text_secondary),
+                        )
+                        .push(Space::new().height(12));
             }
 
             body_col = body_col
-                .push(text(
-                    crate::i18n::t("hk_fingerprint_sha256").replace("{key_type}", &query.key_type),
-                ).size(13).color(OryxisColors::t().text_secondary))
+                .push(
+                    text(
+                        crate::i18n::t("hk_fingerprint_sha256")
+                            .replace("{key_type}", &query.key_type),
+                    )
+                    .size(13)
+                    .color(OryxisColors::t().text_secondary),
+                )
                 .push(Space::new().height(8))
-                .push(text(&query.fingerprint).size(14).color(OryxisColors::t().text_primary))
+                .push(
+                    text(&query.fingerprint)
+                        .size(14)
+                        .color(OryxisColors::t().text_primary),
+                )
                 .push(Space::new().height(16))
-                .push(text(crate::i18n::t("hk_add_question")).size(13).color(OryxisColors::t().text_secondary));
+                .push(
+                    text(crate::i18n::t("hk_add_question"))
+                        .size(13)
+                        .color(OryxisColors::t().text_secondary),
+                );
 
             let body: Element<'_, Message> = container(body_col)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .padding(Padding { top: 8.0, right: 16.0, bottom: 8.0, left: 16.0 })
+                .padding(Padding {
+                    top: 8.0,
+                    right: 16.0,
+                    bottom: 8.0,
+                    left: 16.0,
+                })
                 .style(|_| container::Style {
                     background: Some(Background::Color(OryxisColors::t().bg_sidebar)),
-                    border: Border { radius: Radius::from(10.0), ..Default::default() },
+                    border: Border {
+                        radius: Radius::from(10.0),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 })
                 .into();
@@ -704,7 +829,11 @@ impl Oryxis {
             } else {
                 crate::i18n::t("connecting_status")
             };
-            let status_color = if failed { OryxisColors::t().error } else { OryxisColors::t().text_secondary };
+            let status_color = if failed {
+                OryxisColors::t().error
+            } else {
+                OryxisColors::t().text_secondary
+            };
             let title = container(
                 text(status_text)
                     .size(15)
@@ -716,14 +845,14 @@ impl Oryxis {
             )
             .width(Length::Fill)
             .align_x(Horizontal::Center);
-            let status: Element<'_, Message> = column![
-                Space::new().height(8),
-                title,
-                Space::new().height(4),
-            ]
-            .into();
+            let status: Element<'_, Message> =
+                column![Space::new().height(8), title, Space::new().height(4),].into();
 
-            (status, self.view_connection_log_timeline(progress, failed, pulse), self.view_connection_log_buttons(progress, failed, owned))
+            (
+                status,
+                self.view_connection_log_timeline(progress, failed, pulse),
+                self.view_connection_log_buttons(progress, failed, owned),
+            )
         };
 
         let bottom: Element<'_, Message> = match batch_row {
@@ -846,9 +975,16 @@ impl Oryxis {
             // read as disabled, so every step carries a real color now
             // (see step_color). Errors get the alert glyph in the same
             // disc shape so the column stays visually aligned.
-            let node_color = if is_error { OryxisColors::t().error } else { step_color(*step) };
+            let node_color = if is_error {
+                OryxisColors::t().error
+            } else {
+                step_color(*step)
+            };
             let glyph: Element<'_, Message> = if is_error {
-                iced_fonts::lucide::circle_alert().size(15).color(node_color).into()
+                iced_fonts::lucide::circle_alert()
+                    .size(15)
+                    .color(node_color)
+                    .into()
             } else {
                 step_glyph(*step, node_color)
             };
@@ -867,10 +1003,16 @@ impl Oryxis {
                 .center_x(Length::Fixed(28.0))
                 .center_y(Length::Fixed(28.0))
                 .style(move |_| container::Style {
-                    background: Some(Background::Color(Color { a: tint_a, ..node_color })),
+                    background: Some(Background::Color(Color {
+                        a: tint_a,
+                        ..node_color
+                    })),
                     border: Border {
                         radius: Radius::from(14.0),
-                        color: Color { a: ring_a, ..node_color },
+                        color: Color {
+                            a: ring_a,
+                            ..node_color
+                        },
                         width: ring_w,
                     },
                     ..Default::default()
@@ -896,10 +1038,13 @@ impl Oryxis {
                 } else {
                     step_color(*next_step)
                 };
-                let line_color = Color { a: 0.55, ..next_color };
+                let line_color = Color {
+                    a: 0.55,
+                    ..next_color
+                };
                 let line: Element<'_, Message> = container(Space::new())
                     .width(Length::Fixed(2.0))
-                    .height(Length::Fill)
+                    .height(Length::Fixed(52.0))
                     .style(move |_| container::Style {
                         background: Some(Background::Color(line_color)),
                         ..Default::default()
@@ -921,42 +1066,44 @@ impl Oryxis {
                             background: Some(Background::Color(next_color)),
                             border: Border {
                                 radius: Radius::from(4.0),
-                                color: Color { a: 0.35, ..next_color },
+                                color: Color {
+                                    a: 0.35,
+                                    ..next_color
+                                },
                                 width: 2.0,
                             },
                             ..Default::default()
                         });
                     iced::widget::Stack::with_children(vec![
-                        container(line).center_x(Length::Fixed(8.0)).height(Length::Fill).into(),
+                        container(line)
+                            .center_x(Length::Fixed(8.0))
+                            .height(Length::Fixed(52.0))
+                            .into(),
                         column![
                             Space::new().height(Length::FillPortion(pos)),
                             container(spark).center_x(Length::Fixed(8.0)),
                             Space::new().height(Length::FillPortion(1000 - pos)),
                         ]
-                        .height(Length::Fill)
+                        .height(Length::Fixed(52.0))
                         .into(),
                     ])
                     .width(Length::Fixed(8.0))
-                    .height(Length::Fill)
+                    .height(Length::Fixed(52.0))
                     .into()
                 } else {
                     line
                 }
             };
 
-            // Rail: the marker, then the fill connector. The column is
-            // Fill-height so the connector stretches to the row's height
-            // (driven by the message cell) -- except on the last row,
-            // which has no connector and whose one-line message cell is
-            // SHORTER than the 28 px disc: a Fill rail would adopt that
-            // height and squash the disc into an ellipse, so it shrinks
-            // to the marker instead.
-            let mut rail = column![marker, connector]
+            // Rail: the marker, then a fixed connector. A Fill-height rail
+            // propagates through the scrollable and makes every row claim a
+            // share of the entire card, while its line still lays out at its
+            // intrinsic height — the large blank breaks seen between nodes.
+            // 28 px marker + 52 px connector gives each settled step an
+            // 80 px track whose end is exactly the next marker's top.
+            let rail = column![marker, connector]
                 .align_x(Horizontal::Center)
                 .width(Length::Fixed(32.0));
-            if !is_last {
-                rail = rail.height(Length::Fill);
-            }
 
             // Selectable message, top-padded to sit centered against the
             // disc's first line. Bottom padding (except last) gives the
@@ -986,16 +1133,26 @@ impl Oryxis {
             );
         }
 
-        let timeline = column(rows).padding(Padding { top: 14.0, right: 16.0, bottom: 14.0, left: 12.0 });
-        let log_list = scrollable(iced::widget::selectable_group::<(), Message, _, _>(timeline))
-            .height(Length::Fill);
+        let timeline = column(rows).padding(Padding {
+            top: 14.0,
+            right: 16.0,
+            bottom: 14.0,
+            left: 12.0,
+        });
+        let log_list = scrollable(iced::widget::selectable_group::<(), Message, _, _>(
+            timeline,
+        ))
+        .height(Length::Fill);
 
         container(log_list)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_| container::Style {
                 background: Some(Background::Color(OryxisColors::t().bg_sidebar)),
-                border: Border { radius: Radius::from(10.0), ..Default::default() },
+                border: Border {
+                    radius: Radius::from(10.0),
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .into()
@@ -1057,13 +1214,22 @@ impl Oryxis {
         let copy_btn = button(
             container(
                 row![
-                    iced_fonts::lucide::copy().size(13).color(OryxisColors::t().text_secondary),
+                    iced_fonts::lucide::copy()
+                        .size(13)
+                        .color(OryxisColors::t().text_secondary),
                     Space::new().width(8),
-                    text(crate::i18n::t("copy_logs")).size(13).color(OryxisColors::t().text_primary),
+                    text(crate::i18n::t("copy_logs"))
+                        .size(13)
+                        .color(OryxisColors::t().text_primary),
                 ]
                 .align_y(iced::Alignment::Center),
             )
-            .padding(Padding { top: 10.0, right: 18.0, bottom: 10.0, left: 18.0 }),
+            .padding(Padding {
+                top: 10.0,
+                right: 18.0,
+                bottom: 10.0,
+                left: 18.0,
+            }),
         )
         .on_press(Message::CopyToClipboard(payload.clone()))
         .style(|_, status| button::Style {
@@ -1071,13 +1237,25 @@ impl Oryxis {
                 button::Status::Hovered | button::Status::Pressed => OryxisColors::t().bg_hover,
                 _ => OryxisColors::t().bg_surface,
             })),
-            border: Border { radius: Radius::from(8.0), ..Default::default() },
+            border: Border {
+                radius: Radius::from(8.0),
+                ..Default::default()
+            },
             ..Default::default()
         });
 
         let close_btn = button(
-            container(text(crate::i18n::t("close")).size(13).color(OryxisColors::t().text_primary))
-                .padding(Padding { top: 10.0, right: 24.0, bottom: 10.0, left: 24.0 }),
+            container(
+                text(crate::i18n::t("close"))
+                    .size(13)
+                    .color(OryxisColors::t().text_primary),
+            )
+            .padding(Padding {
+                top: 10.0,
+                right: 24.0,
+                bottom: 10.0,
+                left: 24.0,
+            }),
         )
         .on_press(Message::Ssh(SshMessage::SshCloseProgress))
         .style(|_, status| button::Style {
@@ -1085,7 +1263,10 @@ impl Oryxis {
                 button::Status::Hovered | button::Status::Pressed => OryxisColors::t().bg_hover,
                 _ => OryxisColors::t().bg_surface,
             })),
-            border: Border { radius: Radius::from(8.0), ..Default::default() },
+            border: Border {
+                radius: Radius::from(8.0),
+                ..Default::default()
+            },
             ..Default::default()
         });
 
@@ -1101,7 +1282,12 @@ impl Oryxis {
                         })
                         .color(fg),
                 )
-                .padding(Padding { top: 10.0, right: 24.0, bottom: 10.0, left: 24.0 }),
+                .padding(Padding {
+                    top: 10.0,
+                    right: 24.0,
+                    bottom: 10.0,
+                    left: 24.0,
+                }),
             )
             .on_press(Message::Ssh(SshMessage::SshRetry))
             .style(|_, status| button::Style {
@@ -1115,7 +1301,10 @@ impl Oryxis {
                     ),
                     _ => OryxisColors::t().success,
                 })),
-                border: Border { radius: Radius::from(8.0), ..Default::default() },
+                border: Border {
+                    radius: Radius::from(8.0),
+                    ..Default::default()
+                },
                 ..Default::default()
             })
         };
@@ -1171,7 +1360,8 @@ fn proxy_output_urls(lines: &[oryxis_ssh::ProxyOutputLine]) -> Vec<String> {
         for word in line.text.split_whitespace() {
             let start = word.find("https://").or_else(|| word.find("http://"));
             let Some(start) = start else { continue };
-            let url = word[start..].trim_end_matches(['.', ',', ';', ':', ')', ']', '>', '"', '\'']);
+            let url =
+                word[start..].trim_end_matches(['.', ',', ';', ':', ')', ']', '>', '"', '\'']);
             if url.len() > "https://".len() && !out.iter().any(|u| u == url) {
                 out.push(url.to_string());
                 if out.len() == 3 {
@@ -1200,11 +1390,17 @@ mod proxy_output_tests {
     use oryxis_ssh::{ProxyOutputLine, ProxyOutputSource};
 
     fn stderr(text: &str) -> ProxyOutputLine {
-        ProxyOutputLine { text: text.to_string(), source: ProxyOutputSource::Stderr }
+        ProxyOutputLine {
+            text: text.to_string(),
+            source: ProxyOutputSource::Stderr,
+        }
     }
 
     fn before_banner(text: &str) -> ProxyOutputLine {
-        ProxyOutputLine { text: text.to_string(), source: ProxyOutputSource::BeforeBanner }
+        ProxyOutputLine {
+            text: text.to_string(),
+            source: ProxyOutputSource::BeforeBanner,
+        }
     }
 
     #[test]
@@ -1214,7 +1410,10 @@ mod proxy_output_tests {
             stderr("Open https://sso.example/device?code=AB-12 in a browser."),
             stderr("(or visit <https://sso.example/device?code=AB-12>)"),
         ];
-        assert_eq!(proxy_output_urls(&lines), vec!["https://sso.example/device?code=AB-12"]);
+        assert_eq!(
+            proxy_output_urls(&lines),
+            vec!["https://sso.example/device?code=AB-12"]
+        );
     }
 
     #[test]
@@ -1230,15 +1429,27 @@ mod proxy_output_tests {
             before_banner("Login: https://evil.example/sso"),
             stderr("Open https://sso.example/device in a browser."),
         ];
-        assert_eq!(proxy_output_urls(&lines), vec!["https://sso.example/device"]);
+        assert_eq!(
+            proxy_output_urls(&lines),
+            vec!["https://sso.example/device"]
+        );
         assert!(proxy_output_urls(&[before_banner("https://evil.example/x")]).is_empty());
     }
 
     #[test]
     fn the_button_names_the_host_the_browser_goes_to() {
-        assert_eq!(url_host_label("https://sso.example/device?code=1"), "sso.example");
-        assert_eq!(url_host_label("https://sso.example:8443/x"), "sso.example:8443");
-        assert_eq!(url_host_label("https://sso.example@evil.example/x"), "evil.example");
+        assert_eq!(
+            url_host_label("https://sso.example/device?code=1"),
+            "sso.example"
+        );
+        assert_eq!(
+            url_host_label("https://sso.example:8443/x"),
+            "sso.example:8443"
+        );
+        assert_eq!(
+            url_host_label("https://sso.example@evil.example/x"),
+            "evil.example"
+        );
         assert_eq!(url_host_label("http://host.example"), "host.example");
     }
 }

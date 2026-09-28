@@ -33,14 +33,17 @@ use std::path::{Path, PathBuf};
 /// them and we offer one, so leading with `id_rsa` (its historical
 /// first) would pick the weakest key on a machine that has several.
 ///
-/// `id_ed25519_sk` / `id_ecdsa_sk` are deliberately absent: a security
-/// key's private file is useless without the token, so scanning it in
-/// would shadow a usable key with one the engine cannot sign with.
-/// Hardware keys reach a host through the agent (`AuthMethod::Agent`
-/// and its preferred-identity pin), which is where the token lives.
+/// `id_ed25519_sk` is last rather than absent. The app signs with a
+/// security-key file natively now (the file is a FIDO2 credential
+/// handle, not a scalar), so a machine whose only key is a token handle
+/// can use this source — but it goes at the END because "first usable
+/// wins": a software key that works without hardware must never be
+/// shadowed by one that needs a token plugged in. `id_ecdsa_sk` stays
+/// out entirely until the ECDSA-SK signing path exists, since offering
+/// a key we would only refuse is worse than not offering it.
 /// `id_dsa` is absent because DSA is disabled server-side in current
-/// OpenSSH; an explicit `identity_file` can still name either.
-const DEFAULT_KEY_NAMES: &[&str] = &["id_ed25519", "id_ecdsa", "id_rsa"];
+/// OpenSSH; an explicit `identity_file` can still name any of them.
+const DEFAULT_KEY_NAMES: &[&str] = &["id_ed25519", "id_ecdsa", "id_rsa", "id_ed25519_sk"];
 
 /// What the disk source resolved to for one host. Every variant except
 /// `Ready` is a reason the host editor can show, which is the point:

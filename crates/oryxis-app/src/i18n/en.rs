@@ -2337,6 +2337,11 @@ pub(super) fn lookup(key: &str) -> &'static str {
         "public_key_invalid_error" => "That is not a valid OpenSSH public key line.",
         "public_key_mismatch_error" => "The public key does not match the private key.",
         "cert_no_keys_hint" => "No key in the vault has a certificate attached yet.",
+
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Security Key",
+        "security_key_help" => "Only this hardware key is offered: no agent, no other key, no password fallback. If the key is missing or the touch is declined, the connection fails.",
+        "security_key_none_imported" => "No security key in the vault yet. Import the id_ed25519_sk file ssh-keygen produced.",
         "cert_key_no_cert_hint" => "The selected key has no attached certificate.",
 
         // FIDO2 / PKCS#11 delegation (B3)

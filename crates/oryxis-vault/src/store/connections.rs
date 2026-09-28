@@ -38,6 +38,10 @@ impl VaultStore {
             AuthMethod::Interactive => "interactive",
             AuthMethod::PasswordPrompt => "password_prompt",
             AuthMethod::Certificate => "certificate",
+            // Stored so a host set up for hardware-only auth round-trips.
+            // An unknown value read back falls back to `Auto`, so this
+            // string is additive: older builds degrade rather than break.
+            AuthMethod::SecurityKey => "security_key",
         };
 
         let protocol_str = match conn.protocol {
@@ -262,6 +266,7 @@ impl VaultStore {
                     "interactive" => AuthMethod::Interactive,
                     "password_prompt" => AuthMethod::PasswordPrompt,
                     "certificate" => AuthMethod::Certificate,
+                    "security_key" => AuthMethod::SecurityKey,
                     _ => AuthMethod::Auto,
                 };
 
