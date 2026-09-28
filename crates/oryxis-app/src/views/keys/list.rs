@@ -345,7 +345,7 @@ impl Oryxis {
             // B3, Termius-style: the row reads as the key's kind). A
             // security key wins over the certificate flag when both
             // apply, it is the more load-bearing fact (signing happens
-            // on the hardware token via the agent; the cert shows in
+            // on the hardware token, natively; the cert shows in
             // the editor).
             let algo_text: Element<'_, Message> = text(algo)
                 .size(11)

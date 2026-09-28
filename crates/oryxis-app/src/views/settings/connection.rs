@@ -28,7 +28,8 @@ impl Oryxis {
         // editor's auth picker so the labels match.
         let auth_options: Vec<String> = [
             crate::i18n::t("auth_auto"), crate::i18n::t("auth_password"),
-            crate::i18n::t("auth_key"), crate::i18n::t("auth_certificate"),
+            crate::i18n::t("auth_key"), crate::i18n::t("auth_security_key"),
+            crate::i18n::t("auth_certificate"),
             crate::i18n::t("auth_agent"), crate::i18n::t("auth_interactive"),
         ]
         .iter()

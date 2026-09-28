@@ -5713,6 +5713,7 @@ dependencies = [
  "base64 0.23.1",
  "dirs",
  "dunce",
+ "ed25519-dalek",
  "encoding_rs",
  "filetime",
  "getrandom 0.4.3",

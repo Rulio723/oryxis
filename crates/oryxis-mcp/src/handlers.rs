@@ -336,6 +336,11 @@ fn resolve_credentials(
     // `resolve_credentials` does: a host that authenticates in the UI
     // must not fail here for want of a key source. Its certificate is
     // the `<key>-cert.pub` sibling, so the pair still describes ONE key.
+    //
+    // `SecurityKey` is excluded for the same reason it is in the app:
+    // the scan is for keys that work without hardware, so it could only
+    // hand this mode a software key the engine must then reject. The
+    // host's own vault row (above) is where a token handle comes from.
     let (final_key, final_cert) = match final_key {
         Some(pem) => (Some(pem), final_cert),
         None if matches!(

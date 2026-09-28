@@ -51,6 +51,18 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    # Native FIDO2 security keys (`sk::hid_windows`): SetupAPI walks the
+    # HID class, `hid.dll` says which interface is the FIDO one, and the
+    # CTAPHID channel is an overlapped read/write pair on it.
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_HumanInterfaceDevice",
+    "Win32_System_IO",
+    # Windows Hello (`sk::webauthn_windows`): `webauthn.dll` is loaded at
+    # run time rather than linked, so a machine without it falls back to
+    # the HID transport instead of failing to start, and the dialog it
+    # raises is parented to whatever window is in front.
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # A command proxy runs in a process group of its own, signalled whole
@@ -76,3 +88,8 @@ tempfile = "3"
 # is the only evidence of which forwarding branch was taken.
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
+# The security-key tests verify their signature the way OpenSSH's
+# `sk_ed25519_verify` does, which needs a real Ed25519 verifier and a
+# software "token" holding the private half. Already in the lock as a
+# transitive of the sync stack, so this adds no download.
+ed25519-dalek = { workspace = true }

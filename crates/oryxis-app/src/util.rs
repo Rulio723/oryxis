@@ -1095,6 +1095,7 @@ pub(crate) fn auth_method_label(m: &oryxis_core::models::connection::AuthMethod)
         AuthMethod::Interactive => t("auth_interactive"),
         AuthMethod::PasswordPrompt => t("auth_password_prompt"),
         AuthMethod::Certificate => t("auth_certificate"),
+        AuthMethod::SecurityKey => t("auth_security_key"),
     }
     .to_string()
 }
@@ -1250,6 +1251,8 @@ pub(crate) fn auth_method_from_label(v: &str) -> oryxis_core::models::connection
         AuthMethod::PasswordPrompt
     } else if v == t("auth_certificate") || v == "Certificate" {
         AuthMethod::Certificate
+    } else if v == t("auth_security_key") || v == "SecurityKey" {
+        AuthMethod::SecurityKey
     } else {
         AuthMethod::Auto
     }
@@ -1267,6 +1270,7 @@ pub(crate) fn auth_method_to_setting(m: &oryxis_core::models::connection::AuthMe
         AuthMethod::Interactive => "Interactive",
         AuthMethod::PasswordPrompt => "PasswordPrompt",
         AuthMethod::Certificate => "Certificate",
+        AuthMethod::SecurityKey => "SecurityKey",
     }
     .to_string()
 }
@@ -1282,6 +1286,7 @@ pub(crate) fn auth_method_from_setting(v: &str) -> oryxis_core::models::connecti
         "Interactive" => AuthMethod::Interactive,
         "PasswordPrompt" => AuthMethod::PasswordPrompt,
         "Certificate" => AuthMethod::Certificate,
+        "SecurityKey" => AuthMethod::SecurityKey,
         _ => AuthMethod::Auto,
     }
 }
@@ -1490,6 +1495,8 @@ mod tests {
             AuthMethod::Agent,
             AuthMethod::Interactive,
             AuthMethod::PasswordPrompt,
+            AuthMethod::Certificate,
+            AuthMethod::SecurityKey,
         ] {
             let s = auth_method_to_setting(&m);
             assert_eq!(auth_method_from_setting(&s), m);
@@ -1497,6 +1504,30 @@ mod tests {
         // Unknown / legacy values fall back to Auto, never panic.
         assert_eq!(auth_method_from_setting("garbage"), AuthMethod::Auto);
         assert_eq!(auth_method_from_setting(""), AuthMethod::Auto);
+    }
+
+    #[test]
+    fn auth_method_picker_labels_round_trip() {
+        // The editor stores the *localized* label and maps it back, so
+        // both halves of the pair have to agree for every method the
+        // picker offers — a missing arm silently degrades a saved host to
+        // `Auto`, which is the failure this catches.
+        use oryxis_core::models::connection::AuthMethod;
+        for m in [
+            AuthMethod::Password,
+            AuthMethod::Key,
+            AuthMethod::Agent,
+            AuthMethod::Interactive,
+            AuthMethod::PasswordPrompt,
+            AuthMethod::Certificate,
+            AuthMethod::SecurityKey,
+        ] {
+            let label = auth_method_label(&m);
+            assert_eq!(auth_method_from_label(&label), m, "label was {label:?}");
+        }
+        // `Auto` has no label of its own: it is the fallback for anything
+        // unrecognized, which is what makes a stale saved label survivable.
+        assert_eq!(auth_method_from_label("nonsense"), AuthMethod::Auto);
     }
 
     #[test]

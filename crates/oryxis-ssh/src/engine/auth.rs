@@ -12,6 +12,20 @@ pub(crate) fn effective_username(connection: &Connection) -> &str {
     connection.username.as_deref().unwrap_or("root")
 }
 
+/// Map a security-key failure onto the engine's error type.
+///
+/// A dead SSH transport is a connection failure — nothing local can fix
+/// it — while everything else (no token plugged in, a declined touch, a
+/// PIN we cannot supply, a handle this token does not hold) is a
+/// credential problem the user can act on, so it keeps the message the
+/// token layer produced.
+fn security_key_error(error: crate::sk::SkError) -> SshError {
+    match error {
+        crate::sk::SkError::TransportClosed(message) => SshError::ConnectionFailed(message),
+        other => SshError::Key(other.to_string()),
+    }
+}
+
 impl SshEngine {
     // -----------------------------------------------------------------------
     // Authentication
@@ -30,11 +44,21 @@ impl SshEngine {
         let has_key = key_material.is_some();
         tracing::info!(
             "Auth for {}@{} method={:?} has_password={} has_key={}",
-            username, connection.hostname, connection.auth_method, has_pw, has_key,
+            username,
+            connection.hostname,
+            connection.auth_method,
+            has_pw,
+            has_key,
         );
 
         match self
-            .do_auth(handle, username, &connection.auth_method, password, key_material)
+            .do_auth(
+                handle,
+                username,
+                &connection.auth_method,
+                password,
+                key_material,
+            )
             .await
         {
             Ok(true) => {
@@ -121,7 +145,12 @@ impl SshEngine {
                             StepVerdict::Partial(remaining) => {
                                 return self
                                     .finish_partial_auth(
-                                        handle, username, remaining, key_material, None, Some(pw),
+                                        handle,
+                                        username,
+                                        remaining,
+                                        key_material,
+                                        None,
+                                        Some(pw),
                                     )
                                     .await;
                             }
@@ -138,14 +167,22 @@ impl SshEngine {
                     // quick-connect opt-in below is the one exception.
                     tried.push("keyboard-interactive");
                     tracing::info!("Auto: trying keyboard-interactive auth for {}", username);
-                    match self.try_keyboard_interactive(handle, username, Some(pw), false).await? {
+                    match self
+                        .try_keyboard_interactive(handle, username, Some(pw), false)
+                        .await?
+                    {
                         KbiOutcome::Success => return Ok(true),
                         // Same out-of-order rule as the password arm above:
                         // the step-1 key may be what the server wants next.
                         KbiOutcome::Partial(remaining) => {
                             return self
                                 .finish_partial_auth(
-                                    handle, username, remaining, key_material, None, Some(pw),
+                                    handle,
+                                    username,
+                                    remaining,
+                                    key_material,
+                                    None,
+                                    Some(pw),
                                 )
                                 .await;
                         }
@@ -158,13 +195,24 @@ impl SshEngine {
                 // every silent method has failed, instead of erroring out.
                 if self.auto_interactive_fallback && self.kbi_ask_tx.is_some() {
                     tried.push("keyboard-interactive (prompt)");
-                    tracing::info!("Auto: trying prompted keyboard-interactive auth for {}", username);
-                    match self.try_keyboard_interactive(handle, username, password, true).await? {
+                    tracing::info!(
+                        "Auto: trying prompted keyboard-interactive auth for {}",
+                        username
+                    );
+                    match self
+                        .try_keyboard_interactive(handle, username, password, true)
+                        .await?
+                    {
                         KbiOutcome::Success => return Ok(true),
                         KbiOutcome::Partial(remaining) => {
                             return self
                                 .finish_partial_auth(
-                                    handle, username, remaining, key_material, password, password,
+                                    handle,
+                                    username,
+                                    remaining,
+                                    key_material,
+                                    password,
+                                    password,
                                 )
                                 .await;
                         }
@@ -210,9 +258,7 @@ impl SshEngine {
                                     }
                                 }
                                 None => {
-                                    return Err(SshError::Key(
-                                        "Authentication cancelled".into(),
-                                    ));
+                                    return Err(SshError::Key("Authentication cancelled".into()));
                                 }
                             }
                         }
@@ -250,8 +296,8 @@ impl SshEngine {
                 }
             }
             AuthMethod::Key => {
-                let km = key_material
-                    .ok_or_else(|| SshError::Key("No private key selected".into()))?;
+                let km =
+                    key_material.ok_or_else(|| SshError::Key("No private key selected".into()))?;
 
                 // Strictly the bare key (B2.1): the user picked "Key", so an
                 // attached certificate is never offered here. `Certificate`
@@ -284,13 +330,20 @@ impl SshEngine {
                         StepVerdict::Partial(remaining) => {
                             return self
                                 .finish_partial_auth(
-                                    handle, username, remaining, Some(km), None, Some(pw),
+                                    handle,
+                                    username,
+                                    remaining,
+                                    Some(km),
+                                    None,
+                                    Some(pw),
                                 )
                                 .await;
                         }
                         StepVerdict::Rejected => {}
                     }
-                    return Err(SshError::Key("Both key and password rejected by server".into()));
+                    return Err(SshError::Key(
+                        "Both key and password rejected by server".into(),
+                    ));
                 }
 
                 Err(SshError::Key("Public key rejected by server".into()))
@@ -302,8 +355,7 @@ impl SshEngine {
                 // user asked for exactly this credential, so a missing or
                 // unusable cert must surface instead of silently landing on
                 // a different auth path.
-                let km = key_material
-                    .ok_or_else(|| SshError::Key("No key selected".into()))?;
+                let km = key_material.ok_or_else(|| SshError::Key("No key selected".into()))?;
                 let cert_line = km.certificate.ok_or_else(|| {
                     SshError::Key("The selected key has no attached certificate".into())
                 })?;
@@ -316,21 +368,22 @@ impl SshEngine {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let cert = match check_certificate(cert_line, &private_key, now) {
-                    CertCheck::Unusable(why) => {
-                        return Err(SshError::Key(format!("Certificate unusable: {}", why)));
-                    }
-                    CertCheck::Offer { cert, expired } => {
-                        if expired {
-                            // Advisory only: the server's clock is authoritative.
-                            tracing::warn!(
-                                "Certificate for {} is expired; offering anyway",
-                                username,
-                            );
+                let cert =
+                    match check_certificate(cert_line, private_key.public_key().key_data(), now) {
+                        CertCheck::Unusable(why) => {
+                            return Err(SshError::Key(format!("Certificate unusable: {}", why)));
                         }
-                        cert
-                    }
-                };
+                        CertCheck::Offer { cert, expired } => {
+                            if expired {
+                                // Advisory only: the server's clock is authoritative.
+                                tracing::warn!(
+                                    "Certificate for {} is expired; offering anyway",
+                                    username,
+                                );
+                            }
+                            cert
+                        }
+                    };
                 tracing::info!("Trying certificate auth for {}", username);
                 let res = handle
                     .authenticate_openssh_cert(username, private_key, *cert)
@@ -346,6 +399,48 @@ impl SshEngine {
                     StepVerdict::Rejected => {
                         Err(SshError::Key("Certificate rejected by server".into()))
                     }
+                }
+            }
+            AuthMethod::SecurityKey => {
+                // Hardware-only (B4): the selected token is the only
+                // credential offered. No agent sweep, no second key, no
+                // password, no keyboard-interactive prompt. The point of
+                // the mode is that "the key IS the factor" cannot be
+                // quietly traded for something weaker.
+                let km = key_material.ok_or_else(|| {
+                    SshError::Key(
+                        "Security-key auth needs a security key: select one for this host".into(),
+                    )
+                })?;
+                let credential = self.security_key_credential(km)?.ok_or_else(|| {
+                    SshError::Key(
+                        "Security-key auth needs an OpenSSH security key \
+                         (sk-ssh-ed25519@openssh.com), but the selected key is an ordinary \
+                         private key"
+                            .into(),
+                    )
+                })?;
+
+                tracing::info!("Trying security-key auth for {}", username);
+                match self
+                    .try_security_key_auth(handle, username, credential, km.certificate)
+                    .await?
+                {
+                    StepVerdict::Accepted => Ok(true),
+                    // The token signed and the server accepted it as one
+                    // factor but wants another (issue #125). Every other
+                    // method would now reach for a password; this one must
+                    // not, so say why instead of silently weakening the
+                    // login the user asked for.
+                    StepVerdict::Partial(_) => Err(SshError::Key(format!(
+                        "The security key was accepted for \"{}\", but the server requires \
+                         additional authentication (2FA) that hardware-only mode will not \
+                         answer with a password. Pick another auth method for this host.",
+                        username,
+                    ))),
+                    StepVerdict::Rejected => Err(SshError::Key(
+                        "The security key was rejected by the server".into(),
+                    )),
                 }
             }
             AuthMethod::Agent => {
@@ -369,7 +464,12 @@ impl SshEngine {
                                 StepVerdict::Partial(remaining) => {
                                     return self
                                         .finish_partial_auth(
-                                            handle, username, remaining, None, None, Some(pw),
+                                            handle,
+                                            username,
+                                            remaining,
+                                            None,
+                                            None,
+                                            Some(pw),
                                         )
                                         .await;
                                 }
@@ -387,14 +487,23 @@ impl SshEngine {
                             return Err(e);
                         }
                         if let Some(pw) = password {
-                            tracing::info!("Agent unavailable ({}), trying password for {}", e, username);
+                            tracing::info!(
+                                "Agent unavailable ({}), trying password for {}",
+                                e,
+                                username
+                            );
                             let res = handle.authenticate_password(username, pw).await?;
                             match res.into() {
                                 StepVerdict::Accepted => return Ok(true),
                                 StepVerdict::Partial(remaining) => {
                                     return self
                                         .finish_partial_auth(
-                                            handle, username, remaining, None, None, Some(pw),
+                                            handle,
+                                            username,
+                                            remaining,
+                                            None,
+                                            None,
+                                            Some(pw),
                                         )
                                         .await;
                                 }
@@ -407,13 +516,21 @@ impl SshEngine {
             }
             AuthMethod::Interactive => {
                 tracing::info!("Trying keyboard-interactive auth for {}", username);
-                match self.try_keyboard_interactive(handle, username, password, true).await? {
+                match self
+                    .try_keyboard_interactive(handle, username, password, true)
+                    .await?
+                {
                     KbiOutcome::Success => Ok(true),
                     // The exchange was accepted; the server wants another
                     // method on top (issue #125).
                     KbiOutcome::Partial(remaining) => {
                         self.finish_partial_auth(
-                            handle, username, remaining, key_material, password, password,
+                            handle,
+                            username,
+                            remaining,
+                            key_material,
+                            password,
+                            password,
                         )
                         .await
                     }
@@ -485,7 +602,14 @@ impl SshEngine {
             remaining.iter().map(<&str>::from).collect::<Vec<_>>(),
         );
         if self
-            .continue_partial_auth(handle, username, remaining, unused_key, unused_password, kbi_pw)
+            .continue_partial_auth(
+                handle,
+                username,
+                remaining,
+                unused_key,
+                unused_password,
+                kbi_pw,
+            )
             .await?
         {
             return Ok(true);
@@ -550,22 +674,20 @@ impl SshEngine {
         for _ in 0..MAX_STEPS {
             let verdict = if remaining.contains(&MethodKind::PublicKey) && unused_key.is_some() {
                 let km = unused_key.take().expect("checked is_some");
-                tracing::info!("Partial success: continuing with publickey for {}", username);
-                tokio::time::timeout(
-                    net_timeout,
-                    self.try_publickey_auth(handle, username, km),
-                )
-                .await
-                .map_err(|_| net_err())??
+                tracing::info!(
+                    "Partial success: continuing with publickey for {}",
+                    username
+                );
+                tokio::time::timeout(net_timeout, self.try_publickey_auth(handle, username, km))
+                    .await
+                    .map_err(|_| net_err())??
             } else if remaining.contains(&MethodKind::Password) && unused_password.is_some() {
                 let pw = unused_password.take().expect("checked is_some");
                 tracing::info!("Partial success: continuing with password for {}", username);
-                let res = tokio::time::timeout(
-                    net_timeout,
-                    handle.authenticate_password(username, pw),
-                )
-                .await
-                .map_err(|_| net_err())??;
+                let res =
+                    tokio::time::timeout(net_timeout, handle.authenticate_password(username, pw))
+                        .await
+                        .map_err(|_| net_err())??;
                 StepVerdict::from(res)
             } else if remaining.contains(&MethodKind::KeyboardInteractive) && kbi_available {
                 kbi_available = false;
@@ -575,7 +697,10 @@ impl SshEngine {
                 );
                 // Network rounds are bounded inside; the human wait (the
                 // 2FA modal when no TOTP secret is stored) is not.
-                match self.try_keyboard_interactive(handle, username, kbi_pw, true).await? {
+                match self
+                    .try_keyboard_interactive(handle, username, kbi_pw, true)
+                    .await?
+                {
                     KbiOutcome::Success => StepVerdict::Accepted,
                     // This exchange was ACCEPTED and the server asked for
                     // more: a follow-up keyboard-interactive is a new
@@ -658,6 +783,18 @@ impl SshEngine {
         username: &str,
         material: KeyMaterial<'_>,
     ) -> Result<StepVerdict, SshError> {
+        // A security-key file is not a private key: its "private" body is
+        // a token handle, and the scalar never leaves the token. Routing
+        // it here — rather than letting `decode_secret_key` take it, which
+        // it happily would — is what makes `Auto` and `Key` work with a
+        // YubiKey, and what keeps a handle out of every software signing
+        // path (B4).
+        if let Some(credential) = self.security_key_credential(material)? {
+            return self
+                .try_security_key_auth(handle, username, credential, material.certificate)
+                .await;
+        }
+
         let private_key = russh::keys::decode_secret_key(material.private_pem, None)
             .map_err(|e| SshError::Key(format!("Failed to decode key: {}", e)))?;
         let private_key = Arc::new(private_key);
@@ -700,6 +837,88 @@ impl SshEngine {
         Ok(res.into())
     }
 
+    /// The security-key handle in this material, when it is one.
+    ///
+    /// `Ok(None)` means "an ordinary private key": the caller's software
+    /// path. The check runs our own SK parser rather than
+    /// `decode_secret_key` on purpose — an `id_ed25519_sk` file parses
+    /// fine as a private key, so the only way to keep it out of software
+    /// signing is to ask the question that knows the difference.
+    fn security_key_credential(
+        &self,
+        material: KeyMaterial<'_>,
+    ) -> Result<Option<crate::sk::SkCredential>, SshError> {
+        match crate::sk::SkCredential::from_openssh_private(material.private_pem) {
+            Ok(credential) => Ok(Some(credential)),
+            Err(crate::sk::SkError::NotASecurityKey(_)) => Ok(None),
+            // A security key we cannot drive yet (ECDSA-SK), or a
+            // passphrase-protected handle: a real error either way, and
+            // never a silent slide into software signing.
+            Err(e) => Err(security_key_error(e)),
+        }
+    }
+
+    /// Offer a security key's public half — and, when one is attached and
+    /// usable, its certificate — with the token doing the signing.
+    ///
+    /// Both flavours go through `russh`'s external-signer API, the same
+    /// hook the agent path uses. The difference is on the way back: a
+    /// security-key signature carries the authenticator's flags byte and
+    /// counter, so the three token outputs are assembled explicitly by
+    /// `sk::signature` (see the wire-format notes there).
+    async fn try_security_key_auth(
+        &self,
+        handle: &mut client::Handle<ClientHandler>,
+        username: &str,
+        credential: crate::sk::SkCredential,
+        certificate: Option<&str>,
+    ) -> Result<StepVerdict, SshError> {
+        let public_key = credential.public_key().clone();
+        let mut signer = crate::sk::SkSigner::new(credential, crate::sk::platform_authenticator());
+
+        if let Some(cert_line) = certificate {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if let CertCheck::Offer { cert, expired } =
+                check_certificate(cert_line, public_key.key_data(), now)
+            {
+                if expired {
+                    // Advisory only: the server's clock is authoritative.
+                    tracing::warn!("Certificate for {} is expired; offering anyway", username,);
+                }
+                let res = handle
+                    .authenticate_certificate_with(username, *cert, None, &mut signer)
+                    .await
+                    .map_err(security_key_error)?;
+                match StepVerdict::from(res) {
+                    // Landed (accepted outright, or accepted as the first
+                    // factor): do not follow it with the bare key, the
+                    // server is no longer asking for a credential.
+                    verdict @ (StepVerdict::Accepted | StepVerdict::Partial(_)) => {
+                        return Ok(verdict);
+                    }
+                    // Refused: the server treats the cert and the bare key
+                    // as separate identities, so try the key — the same
+                    // degrade the software path does.
+                    StepVerdict::Rejected => {
+                        tracing::info!(
+                            "Certificate refused for {}; offering the bare security key",
+                            username,
+                        );
+                    }
+                }
+            }
+        }
+
+        let res = handle
+            .authenticate_publickey_with(username, public_key, None, &mut signer)
+            .await
+            .map_err(security_key_error)?;
+        Ok(res.into())
+    }
+
     /// Offer an OpenSSH certificate during publickey auth. Returns:
     /// - `Ok(Some(verdict))` the offer reached the server (accepted,
     ///   rejected, or accepted-partially per RFC 4252);
@@ -720,7 +939,7 @@ impl SshEngine {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let cert = match check_certificate(cert_line, private_key, now) {
+        let cert = match check_certificate(cert_line, private_key.public_key().key_data(), now) {
             CertCheck::Unusable(why) => {
                 tracing::warn!("Attached certificate unusable ({why}); using bare key");
                 return Ok(None);
@@ -877,7 +1096,10 @@ impl SshEngine {
             .map_err(|_| net_err())??;
         }
 
-        tracing::warn!("keyboard-interactive exceeded {} rounds, giving up", MAX_ROUNDS);
+        tracing::warn!(
+            "keyboard-interactive exceeded {} rounds, giving up",
+            MAX_ROUNDS
+        );
         Ok(KbiOutcome::Rejected)
     }
 
@@ -976,8 +1198,8 @@ impl SshEngine {
         D: Clone,
         T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
         Fut: std::future::Future<
-            Output = Result<russh::keys::agent::client::AgentClient<T>, russh::keys::Error>,
-        >,
+                Output = Result<russh::keys::agent::client::AgentClient<T>, russh::keys::Error>,
+            >,
     {
         let mut offered: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut connected_any = false;
@@ -987,8 +1209,7 @@ impl SshEngine {
         // endpoints and reports them.
         if let Some(pinned) = self.pinned_agent_key.clone() {
             for candidate in candidates {
-                let DialStep::Listed(mut agent, identities) =
-                    dial_and_list(&dial, candidate).await
+                let DialStep::Listed(mut agent, identities) = dial_and_list(&dial, candidate).await
                 else {
                     continue;
                 };
@@ -1100,13 +1321,15 @@ impl SshEngine {
         // Server-advertised RSA hash is per-connection, resolved once
         // (not per key) so a multi-key agent doesn't burn MaxAuthTries.
         let rsa_hash = server_rsa_hash(handle).await;
-        for identity in
-            select_agent_identities(identities, self.pinned_agent_key.as_ref())
-        {
+        for identity in select_agent_identities(identities, self.pinned_agent_key.as_ref()) {
             let tag = identity_offer_tag(&identity);
             let pubkey = identity.public_key().into_owned();
             let fingerprint = pubkey.fingerprint(russh::keys::HashAlg::Sha256);
-            let hash = if pubkey.algorithm().is_rsa() { rsa_hash } else { None };
+            let hash = if pubkey.algorithm().is_rsa() {
+                rsa_hash
+            } else {
+                None
+            };
             let res = match identity {
                 russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => {
                     handle
@@ -1218,7 +1441,10 @@ impl From<client::AuthResult> for StepVerdict {
     fn from(res: client::AuthResult) -> Self {
         match res {
             client::AuthResult::Success => StepVerdict::Accepted,
-            client::AuthResult::Failure { remaining_methods, partial_success } => {
+            client::AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } => {
                 if partial_success {
                     StepVerdict::Partial(remaining_methods)
                 } else {
@@ -1286,8 +1512,8 @@ where
     D: Clone,
     T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     Fut: std::future::Future<
-        Output = Result<russh::keys::agent::client::AgentClient<T>, russh::keys::Error>,
-    >,
+            Output = Result<russh::keys::agent::client::AgentClient<T>, russh::keys::Error>,
+        >,
 {
     tokio::time::timeout(AGENT_DIAL_TIMEOUT, async {
         match dial(candidate.clone()).await {
@@ -1374,30 +1600,37 @@ enum CertCheck {
     Unusable(&'static str),
 }
 
-/// Validate `cert_line` against `private_key` at wall-clock `now_unix`
+/// Validate `cert_line` against `public_key` at wall-clock `now_unix`
 /// (0 = unknown, skips the expiry check). Never fails: a bad cert is a
 /// `Unusable`, so the auth path can always degrade to the plain key.
+///
+/// Takes the key's public half rather than a `PrivateKey` because a
+/// security key has no private half to hand over — the same check has to
+/// serve both (B4).
 fn check_certificate(
     cert_line: &str,
-    private_key: &russh::keys::PrivateKey,
+    public_key: &russh::keys::ssh_key::public::KeyData,
     now_unix: u64,
 ) -> CertCheck {
     let cert = match russh::keys::Certificate::from_openssh(cert_line) {
         Ok(c) => c,
         Err(_) => return CertCheck::Unusable("unparseable"),
     };
-    // The certificate must certify exactly this private key.
-    if cert.public_key() != private_key.public_key().key_data() {
+    // The certificate must certify exactly this key.
+    if cert.public_key() != public_key {
         return CertCheck::Unusable("does not match the private key");
     }
     let expired = now_unix != 0 && cert.valid_before() != 0 && now_unix > cert.valid_before();
-    CertCheck::Offer { cert: Box::new(cert), expired }
+    CertCheck::Offer {
+        cert: Box::new(cert),
+        expired,
+    }
 }
 
 #[cfg(test)]
 mod cert_tests {
-    use super::{check_certificate, CertCheck};
-    use russh::keys::ssh_key::{certificate, Algorithm, PrivateKey};
+    use super::{CertCheck, check_certificate};
+    use russh::keys::ssh_key::{Algorithm, PrivateKey, certificate};
 
     /// A CA-signed user certificate for `user_key`, valid across `now`,
     /// as its OpenSSH public line.
@@ -1421,7 +1654,7 @@ mod cert_tests {
     fn matching_cert_is_offered() {
         let key = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
         let cert = make_cert(&key, 4_000_000_000); // far future
-        match check_certificate(&cert, &key, 1_700_000_000) {
+        match check_certificate(&cert, key.public_key().key_data(), 1_700_000_000) {
             CertCheck::Offer { expired, .. } => assert!(!expired),
             CertCheck::Unusable(w) => panic!("expected offer, got {w}"),
         }
@@ -1431,7 +1664,7 @@ mod cert_tests {
     fn expired_cert_is_still_offered_flagged() {
         let key = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
         let cert = make_cert(&key, 1_000); // long past
-        match check_certificate(&cert, &key, 1_700_000_000) {
+        match check_certificate(&cert, key.public_key().key_data(), 1_700_000_000) {
             CertCheck::Offer { expired, .. } => assert!(expired, "should flag expiry"),
             CertCheck::Unusable(w) => panic!("expired cert must still be offered, got {w}"),
         }
@@ -1443,7 +1676,7 @@ mod cert_tests {
         let other = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
         let cert = make_cert(&other, 4_000_000_000); // certifies `other`, not `key`
         assert!(matches!(
-            check_certificate(&cert, &key, 1_700_000_000),
+            check_certificate(&cert, key.public_key().key_data(), 1_700_000_000),
             CertCheck::Unusable(_)
         ));
     }
@@ -1452,7 +1685,7 @@ mod cert_tests {
     fn garbage_cert_line_is_unusable() {
         let key = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
         assert!(matches!(
-            check_certificate("not a certificate", &key, 0),
+            check_certificate("not a certificate", key.public_key().key_data(), 0),
             CertCheck::Unusable(_)
         ));
     }
@@ -1462,7 +1695,7 @@ mod cert_tests {
 mod agent_dedup_tests {
     use super::identity_offer_tag;
     use russh::keys::agent::AgentIdentity;
-    use russh::keys::ssh_key::{certificate, Algorithm, Certificate, PrivateKey};
+    use russh::keys::ssh_key::{Algorithm, Certificate, PrivateKey, certificate};
 
     /// A CA-signed user certificate for `user_key`. The random nonce
     /// makes every call produce a distinct blob, like a real reissue.
@@ -1483,7 +1716,10 @@ mod agent_dedup_tests {
     }
 
     fn cert_identity(certificate: Certificate) -> AgentIdentity {
-        AgentIdentity::Certificate { certificate, comment: String::new() }
+        AgentIdentity::Certificate {
+            certificate,
+            comment: String::new(),
+        }
     }
 
     #[test]
@@ -1548,8 +1784,8 @@ mod agent_dedup_tests {
 #[cfg(test)]
 mod agent_pin_tests {
     use super::select_agent_identities;
-    use russh::keys::agent::AgentIdentity;
     use russh::keys::PublicKey;
+    use russh::keys::agent::AgentIdentity;
 
     // Public security-key fixture from the ssh-key crate's test suite
     // (public material only, nothing secret).

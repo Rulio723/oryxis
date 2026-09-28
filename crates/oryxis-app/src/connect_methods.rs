@@ -12,11 +12,27 @@ use crate::app::Oryxis;
 /// Whether this host's auth method ever offers a private key of its
 /// own. `Agent` is absent: its key lives in the agent process, and a
 /// local PEM would be a second credential the user did not pick.
+///
+/// `SecurityKey` is present: the hardware key IS this host's key, and
+/// the vault row holds the FIDO2 credential handle the engine signs
+/// with. Resolving it here is what makes "the key is the credential"
+/// true rather than a mode that merely refuses everything else.
 pub(crate) fn conn_uses_key(conn: &Connection) -> bool {
     matches!(
         conn.auth_method,
-        AuthMethod::Key | AuthMethod::Auto | AuthMethod::Certificate
+        AuthMethod::Key | AuthMethod::Auto | AuthMethod::Certificate | AuthMethod::SecurityKey
     )
+}
+
+/// Whether the disk-key source may fill an empty key slot. A
+/// hardware-only host is excluded: `~/.ssh` is scanned for keys that
+/// work without hardware, so the disk could hand this mode a software
+/// key it must then reject — a failure the user would read as "my
+/// YubiKey is broken". An explicit `identity_file` still works through
+/// the same scan, and a token handle named there is signed with
+/// natively.
+pub(crate) fn conn_may_use_disk_key(conn: &Connection) -> bool {
+    conn_uses_key(conn) && conn.auth_method != AuthMethod::SecurityKey
 }
 
 impl Oryxis {
@@ -74,7 +90,7 @@ impl Oryxis {
             // `<key>-cert.pub` sibling), never from the vault: the pair
             // must always describe ONE key, which is the whole reason
             // `KeyMaterial` bundles them.
-            None if conn_uses_key(conn) => {
+            None if conn_may_use_disk_key(conn) => {
                 match oryxis_vault::resolve_disk_key(
                     conn.use_disk_key,
                     conn.identity_file.as_deref(),
@@ -630,7 +646,8 @@ impl UnattendedDial {
 
 #[cfg(test)]
 mod tests {
-    use super::quick_connect_offerable;
+    use super::{conn_may_use_disk_key, conn_uses_key, quick_connect_offerable};
+    use oryxis_core::models::connection::{AuthMethod, Connection};
     use oryxis_core::ssh_target::SshTarget;
 
     fn parsed(s: &str) -> SshTarget {
@@ -654,5 +671,48 @@ mod tests {
         let t = parsed("staging");
         assert!(!quick_connect_offerable(&t, true));
         assert!(quick_connect_offerable(&t, false));
+    }
+
+    fn host(auth: AuthMethod) -> Connection {
+        let mut conn = Connection::new("h", "h.example");
+        conn.auth_method = auth;
+        conn
+    }
+
+    #[test]
+    fn a_key_offering_method_is_what_resolves_a_vault_key() {
+        // The methods that name a key of their own — including the
+        // hardware-only one, whose vault row holds the token handle.
+        for auth in [
+            AuthMethod::Key,
+            AuthMethod::Auto,
+            AuthMethod::Certificate,
+            AuthMethod::SecurityKey,
+        ] {
+            let name = format!("{auth:?}");
+            assert!(conn_uses_key(&host(auth)), "{name} should offer a key");
+        }
+        // `Agent`'s key lives in the agent process, and the rest carry no
+        // key at all: resolving one would be a credential nobody picked.
+        for auth in [
+            AuthMethod::Agent,
+            AuthMethod::Password,
+            AuthMethod::Interactive,
+            AuthMethod::PasswordPrompt,
+        ] {
+            let name = format!("{auth:?}");
+            assert!(!conn_uses_key(&host(auth)), "{name} should not offer a key");
+        }
+    }
+
+    #[test]
+    fn the_disk_source_never_fills_a_hardware_only_host() {
+        // `~/.ssh` is scanned for keys that work without hardware, so a
+        // `SecurityKey` host could only be handed a software key the
+        // engine must then reject — a failure the user would read as
+        // "my key is broken".
+        assert!(!conn_may_use_disk_key(&host(AuthMethod::SecurityKey)));
+        assert!(conn_may_use_disk_key(&host(AuthMethod::Key)));
+        assert!(conn_may_use_disk_key(&host(AuthMethod::Auto)));
     }
 }
