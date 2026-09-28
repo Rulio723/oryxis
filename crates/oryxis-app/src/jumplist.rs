@@ -46,7 +46,9 @@ pub(crate) fn tag_window(handle: &dyn iced::Window) {
     use iced::window::raw_window_handle::RawWindowHandle;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
-    use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
+    use windows::Win32::UI::Shell::PropertiesSystem::{
+        IPropertyStore, SHGetPropertyStoreForWindow,
+    };
 
     let Ok(wh) = handle.window_handle() else {
         return;
@@ -58,6 +60,32 @@ pub(crate) fn tag_window(handle: &dyn iced::Window) {
 
     let result: windows::core::Result<()> = (|| unsafe {
         let store: IPropertyStore = SHGetPropertyStoreForWindow(hwnd)?;
+        // An explicit window AUMID changes how Explorer resolves the
+        // taskbar group's identity.  In particular, a portable build has
+        // no Start-menu shortcut carrying this AUMID for Explorer to fall
+        // back to, so setting only PKEY_AppUserModel_ID leaves the button
+        // with the generic application glyph.  Microsoft requires the
+        // relaunch properties to be written BEFORE the ID (setting the ID
+        // tells the taskbar to refresh the window immediately).
+        //
+        // Point both relaunch and icon resolution at the running binary,
+        // not an install directory: this keeps copied/USB builds portable.
+        // winresource embeds logo.ico as numeric resource 1; the standard
+        // resource syntax uses a negative numeric resource id.
+        let exe = std::env::current_exe().map_err(windows::core::Error::from)?;
+        let exe_path = exe.to_string_lossy();
+        let relaunch_command = format!("\"{exe_path}\"");
+        let relaunch_icon = format!("{exe_path},-1");
+        let command = PROPVARIANT::from(relaunch_command.as_str());
+        store.SetValue(&imp::PKEY_APPUSERMODEL_RELAUNCH_COMMAND, &command)?;
+        let display_name = PROPVARIANT::from("Oryxis");
+        store.SetValue(
+            &imp::PKEY_APPUSERMODEL_RELAUNCH_DISPLAY_NAME_RESOURCE,
+            &display_name,
+        )?;
+        let icon = PROPVARIANT::from(relaunch_icon.as_str());
+        store.SetValue(&imp::PKEY_APPUSERMODEL_RELAUNCH_ICON_RESOURCE, &icon)?;
+
         // `From<&str>` builds a BSTR-backed PROPVARIANT, which the property
         // system accepts for these string-valued keys.
         let value = PROPVARIANT::from(AUMID);
@@ -85,15 +113,15 @@ pub(crate) fn set_recent(exe: &std::path::Path, category: &str, entries: &[(Stri
 mod imp {
     use std::collections::HashSet;
 
-    use windows::core::{Interface, GUID, HSTRING};
     use windows::Win32::Foundation::PROPERTYKEY;
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
-    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
     use windows::Win32::UI::Shell::Common::{IObjectArray, IObjectCollection};
     use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
     use windows::Win32::UI::Shell::{
         DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW, ShellLink,
     };
+    use windows::core::{GUID, HSTRING, Interface};
 
     /// `PKEY_Title` ({F29F85E0-4FF9-1068-AB91-08002B27B3D9}, pid 2): the
     /// visible label of a JumpList row (SetDescription is only the tooltip).
@@ -104,6 +132,21 @@ mod imp {
 
     /// `PKEY_AppUserModel_ID` ({9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3},
     /// pid 5): the window/shortcut AUMID property.
+    pub(super) const PKEY_APPUSERMODEL_RELAUNCH_COMMAND: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x9F4C2855_9F79_4B39_A8D0_E1D42DE1D5F3),
+        pid: 2,
+    };
+
+    pub(super) const PKEY_APPUSERMODEL_RELAUNCH_ICON_RESOURCE: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x9F4C2855_9F79_4B39_A8D0_E1D42DE1D5F3),
+        pid: 3,
+    };
+
+    pub(super) const PKEY_APPUSERMODEL_RELAUNCH_DISPLAY_NAME_RESOURCE: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x9F4C2855_9F79_4B39_A8D0_E1D42DE1D5F3),
+        pid: 4,
+    };
+
     pub(super) const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
         fmtid: GUID::from_u128(0x9F4C2855_9F79_4B39_A8D0_E1D42DE1D5F3),
         pid: 5,
@@ -168,8 +211,7 @@ mod imp {
                 if skip.contains(id) {
                     continue;
                 }
-                let link: IShellLinkW =
-                    CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+                let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
                 link.SetPath(&exe_h)?;
                 link.SetArguments(&HSTRING::from(format!("--connect {id}")))?;
                 // Use the exe's own icon for each entry.
