@@ -694,6 +694,19 @@ impl Oryxis {
                 self.prefs.sidebar_default_tab =
                     crate::state::TerminalSidebarTab::from_code(&v);
             }
+            // The active tab of each physical sidebar region is global
+            // UI state, not terminal-tab state. Restore both remembered
+            // slots after loading placements. `sidebar_region_tab()`
+            // validates the restored value against its current side and
+            // availability, so stale / moved / gated tabs safely fall
+            // back without destroying the memory.
+            for side in crate::state::SidebarSide::BOTH {
+                if let Ok(Some(v)) = vault.get_setting(side.last_tab_setting_key())
+                    && let Some(tab) = crate::state::TerminalSidebarTab::from_code(&v)
+                {
+                    self.terminal_sidebar_tab[side.idx()] = tab;
+                }
+            }
             if let Ok(Some(v)) = vault.get_setting("monitor_status_bar") {
                 self.prefs.monitor_status_bar = v == "true";
             }

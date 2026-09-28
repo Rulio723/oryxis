@@ -123,22 +123,32 @@ impl Oryxis {
         self.sidebar_toggle_target().map(SidebarSide::other)
     }
 
-    /// The region the connect paths' sidebar auto-open should open:
-    /// the configured default tab's region when that region can show
-    /// SOMETHING under the feature toggles, else the historical right
-    /// bias, and `None` when no region can (a latched-open empty
-    /// region renders nothing and reads as the setting being broken).
-    pub(crate) fn sidebar_auto_open_side(&self) -> Option<SidebarSide> {
+    /// Prepare a connect path's sidebar auto-open and return the region
+    /// it should open. A configured default tab wins over the restored
+    /// "last opened" memory; without one, that memory is left intact.
+    /// The default tab's region is preferred when it can show something
+    /// under the feature toggles, else this keeps the historical right
+    /// bias. `None` means no region can show anything.
+    pub(crate) fn sidebar_auto_open_side(&mut self) -> Option<SidebarSide> {
         let possible = |side: SidebarSide| {
             TerminalSidebarTab::ALL.into_iter().any(|t| {
                 self.prefs.sidebar_tab_side(t) == Some(side) && self.sidebar_tab_possible(t)
             })
         };
-        self.prefs
+        let side = self
+            .prefs
             .sidebar_default_tab
             .and_then(|t| self.prefs.sidebar_tab_side(t))
             .filter(|s| possible(*s))
-            .or_else(|| [SidebarSide::Right, SidebarSide::Left].into_iter().find(|s| possible(*s)))
+            .or_else(|| [SidebarSide::Right, SidebarSide::Left].into_iter().find(|s| possible(*s)));
+
+        if let (Some(default), Some(side)) = (self.prefs.sidebar_default_tab, side)
+            && self.prefs.sidebar_tab_side(default) == Some(side)
+            && self.sidebar_tab_possible(default)
+        {
+            self.set_sidebar_region_tab(default);
+        }
+        side
     }
 
     /// The tabs a region offers right now, in strip order (hidden
@@ -210,12 +220,14 @@ impl Oryxis {
         self.active_sidebar_shown(side) && self.sidebar_region_tab(side) == Some(tab)
     }
 
-    /// Make `tab` the active tab of its own region (the region is
-    /// looked up, never passed, so a caller can't desync them). A
-    /// hidden tab has no region, so it is never remembered as active.
+    /// Make `tab` the active tab of its own region and persist that
+    /// choice across launches (the region is looked up, never passed,
+    /// so a caller can't desync them). A hidden tab has no region, so
+    /// it is never remembered as active.
     pub(crate) fn set_sidebar_region_tab(&mut self, tab: TerminalSidebarTab) {
         if let Some(side) = self.prefs.sidebar_tab_side(tab) {
             self.terminal_sidebar_tab[side.idx()] = tab;
+            self.persist_setting(side.last_tab_setting_key(), tab.code());
         }
     }
 
@@ -243,7 +255,7 @@ impl Oryxis {
                     && self.terminal_sidebar_tab[from.idx()] == tab
                     && self.sidebar_tab_available(tab)
             });
-            self.terminal_sidebar_tab[to_side.idx()] = tab;
+            self.set_sidebar_region_tab(tab);
             if was_showing
                 && let Some(from) = came_from
             {

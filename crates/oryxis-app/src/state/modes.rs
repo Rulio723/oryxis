@@ -72,6 +72,16 @@ impl SidebarSide {
             SidebarSide::Right => SidebarSide::Left,
         }
     }
+
+    /// Settings key holding the last active tab for this physical
+    /// sidebar region. Kept per-side because both regions may be open
+    /// at once and each has its own remembered tab.
+    pub(crate) fn last_tab_setting_key(self) -> &'static str {
+        match self {
+            SidebarSide::Left => "sidebar_last_tab_left",
+            SidebarSide::Right => "sidebar_last_tab_right",
+        }
+    }
 }
 
 /// Where a sidebar tab lives (the per-tab location setting): one of
@@ -136,7 +146,7 @@ impl TerminalSidebarTab {
         TerminalSidebarTab::HostConfig,
     ];
 
-    /// Stable code persisted in the `sidebar_default_tab` setting.
+    /// Stable code persisted in the sidebar default / last-tab settings.
     pub fn code(self) -> &'static str {
         match self {
             TerminalSidebarTab::Chat => "chat",

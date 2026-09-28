@@ -284,6 +284,12 @@ impl Oryxis {
                 {
                     self.prefs.sidebar_default_tab = Some(tab);
                     self.persist_setting("sidebar_default_tab", tab.code());
+                    // The explicit default is stronger than the
+                    // remembered "last opened" tab. Apply it now as
+                    // well as on future auto-opens so changing this
+                    // picker cannot leave an already-open region on a
+                    // contradictory tab.
+                    self.set_sidebar_region_tab(tab);
                 }
             }
             SettingsMessage::ToggleScrollbackResetKeypress => {
