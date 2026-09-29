@@ -275,17 +275,9 @@ tracks it interactively.
   two vaults never share a key. A unified unlock is offered for people
   who want the split for organization rather than secrecy, opening the
   linked ones together; that is a per-vault choice, not the default.
-- **Native FIDO2:** Oryxis parses an `sk-ssh-ed25519` credential handle
-  and assembles the signature blob itself — no external agent, and no
-  administrator prompt. On Windows it signs through the Windows Hello
-  WebAuthn API, which is the same route Microsoft's own OpenSSH takes and
-  the only one open to a program the user launched normally: since
-  Windows 10 1903 a non-elevated process cannot open a FIDO device over
-  raw USB HID at all. A CTAP2-over-HID transport is implemented for
-  machines without Windows Hello, but it needs administrator rights, and
-  the token it was measured against rejects any request too large to fit
-  in a single packet. Still to come:
-  `sk-ecdsa-sha2-nistp256`, NFC, and macOS / Linux.
+- **Native FIDO2:** talk to security keys directly (USB / NFC) for
+  `sk-ssh-ed25519` / `sk-ecdsa-sk`, without delegating the touch to an
+  external agent.
 - **AI ops toolkit:** the assistant graduates from generating shell
   strings to typed, structured operations synthesized for the host's
   actual OS, with dry-run previews on every state change, an audit
