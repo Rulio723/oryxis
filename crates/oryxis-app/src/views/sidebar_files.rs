@@ -173,6 +173,35 @@ impl Oryxis {
                     t("refresh"),
                 ),
             );
+            // Keep transfer actions discoverable even when the user never
+            // opens a context menu. Upload opens the local file picker;
+            // download appears after selecting one or more remote rows and
+            // asks for the destination directory.
+            let upload_btn = (!is_local_pane && files.client.is_some()).then(|| {
+                let upload = Message::SidebarFiles(
+                    SidebarFilesMessage::SidebarFilesUploadInto(files.path.clone()),
+                );
+                self.sidebar_nav_slot(
+                    crate::keynav::SidebarRow::button(upload.clone()),
+                    stab,
+                    6.0,
+                    action_btn(iced_fonts::lucide::upload(), upload, t("upload_here")),
+                )
+            });
+            let download_btn = (!is_local_pane
+                && files.client.is_some()
+                && !files.selected.is_empty())
+            .then(|| {
+                let download = Message::SidebarFiles(
+                    SidebarFilesMessage::SidebarFilesDownloadSelection,
+                );
+                self.sidebar_nav_slot(
+                    crate::keynav::SidebarRow::button(download.clone()),
+                    stab,
+                    6.0,
+                    action_btn(iced_fonts::lucide::download(), download, t("download")),
+                )
+            });
             // No dual-pane SFTP surface exists for a local shell, so
             // the promote affordance hides there (issue #145).
             let expand_btn = (!is_local_pane).then(|| {
@@ -192,6 +221,12 @@ impl Oryxis {
                 cells.push(arrow);
             }
             cells.extend([pin_btn, hidden_btn, refresh_btn]);
+            if let Some(btn) = upload_btn {
+                cells.push(btn);
+            }
+            if let Some(btn) = download_btn {
+                cells.push(btn);
+            }
             if let Some(btn) = expand_btn {
                 cells.push(btn);
             }

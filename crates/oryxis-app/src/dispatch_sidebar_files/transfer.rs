@@ -330,11 +330,17 @@ impl Oryxis {
                 // `upload_from` loop had no per-file progress, no
                 // concurrency and no cancel. The runner has all three.
                 let concurrency = self.sftp_concurrency();
-                let label = paths
-                    .first()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                let label = if paths.len() == 1 {
+                    paths[0]
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "upload".to_string())
+                } else {
+                    format!("{} {}", paths.len(), crate::i18n::t("sftp_log_items"))
+                };
                 Task::perform(
                     async move {
                         let mut queue = std::collections::VecDeque::new();
@@ -343,19 +349,35 @@ impl Oryxis {
                                 .file_name()
                                 .map(|n| n.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| "file".to_string());
-                            let size = tokio::fs::metadata(&local).await.ok().map(|m| m.len());
-                            queue.push_back(crate::state::TransferItem {
-                                src: local.to_string_lossy().into_owned(),
-                                dst: files_join(&dir, &name),
-                                is_dir: false,
-                                size,
-                            });
+                            let target = files_join(&dir, &name);
+                            if local.is_dir() {
+                                queue.push_back(crate::state::TransferItem {
+                                    src: local.to_string_lossy().into_owned(),
+                                    dst: target.clone(),
+                                    is_dir: true,
+                                    size: None,
+                                });
+                                crate::sftp_helpers::walk_local_for_upload(
+                                    &local,
+                                    &target,
+                                    &mut queue,
+                                )
+                                .map_err(|e| e.to_string())?;
+                            } else {
+                                let size = tokio::fs::metadata(&local).await.ok().map(|m| m.len());
+                                queue.push_back(crate::state::TransferItem {
+                                    src: local.to_string_lossy().into_owned(),
+                                    dst: target,
+                                    is_dir: false,
+                                    size,
+                                });
+                            }
                         }
                         let clients =
                             crate::sftp_helpers::build_client_pool(client, concurrency)
                                 .await
-                                .ok()?;
-                        Some(crate::state::TransferState::new(
+                                .map_err(|e| e.to_string())?;
+                        Ok::<crate::state::TransferState, String>(crate::state::TransferState::new(
                             crate::state::TransferKind::Upload,
                             label.clone(),
                             queue,
@@ -366,11 +388,11 @@ impl Oryxis {
                         ))
                     },
                     move |state| match state {
-                        Some(state) => Message::SftpFor(
+                        Ok(state) => Message::SftpFor(
                             pane_id,
                             Box::new(SftpMessage::SftpTransferQueueReady(pane_id, state)),
                         ),
-                        None => Message::NoOp,
+                        Err(e) => Message::SidebarFiles(SidebarFilesMessage::SidebarFilesOpToast(e)),
                     },
                 )
             }

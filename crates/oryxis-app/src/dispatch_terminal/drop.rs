@@ -146,21 +146,23 @@ impl Oryxis {
 
         // One transfer per pane at a time. The running one's card is on
         // screen, so the state is visible rather than silently dropped.
-        if pane.zmodem.is_some() || pane.drop_upload.is_some() || !pane.pending_drop_sources.is_empty() {
+        // The sidebar browser owns its own transfer runner; include it in
+        // the gate before routing a drop there so a second gesture cannot
+        // replace the progress strip that is already on screen.
+        if pane.zmodem.is_some()
+            || pane.drop_upload.is_some()
+            || pane.files.transfer.state.is_some()
+            || !pane.pending_drop_sources.is_empty()
+        {
             return Task::none();
         }
-
-        // Broken symlinks and unreadable entries ride the FILE branch on
-        // purpose: the transport's own open() error is the honest report,
-        // where #106's `is_file()` partition silently misfiled them as
-        // folders.
-        let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) =
-            paths.into_iter().partition(|p| p.is_dir());
 
         let Some(session) = pane.session.as_ref() else {
             // Local shell: paste the quoted paths, the convention every
             // terminal follows for drops. Riding the paste path keeps
             // bracketed paste and the paste guards.
+            let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) =
+                paths.into_iter().partition(|p| p.is_dir());
             let line = typed_drop_line(&files, &dirs);
             if !line.is_empty() {
                 self.paste_text_into_tab(tab_id, &line);
@@ -176,9 +178,32 @@ impl Oryxis {
         // that directory is not the one on screen.
         let sidebar_dir = (pane_id == tab.active().id
             && self.sidebar_tab_shown(crate::state::TerminalSidebarTab::Files)
-            && pane.files.client.is_some()
+            && pane.files.client.as_ref().and_then(|c| c.sftp()).is_some()
             && !pane.files.path.is_empty())
         .then(|| pane.files.path.clone());
+
+        // A visible Files sidebar is an explicit remote-browser target,
+        // not a terminal drop. Feed it through the sidebar's own transfer
+        // queue so uploads use the already-mounted SFTP client and the
+        // progress/cancel strip is drawn in the sidebar itself. Previously
+        // this fell through to `begin_drop_sftp_upload`, which opened a
+        // second channel and rendered progress over the terminal.
+        if let Some(dest) = sidebar_dir {
+            return Task::done(Message::SidebarFiles(
+                crate::app::SidebarFilesMessage::SidebarFilesUploadPicked(
+                    pane_id,
+                    dest,
+                    paths,
+                ),
+            ));
+        }
+
+        // Broken symlinks and unreadable entries ride the FILE branch on
+        // purpose: the transport's own open() error is the honest report,
+        // where #106's `is_file()` partition silently misfiled them as
+        // folders.
+        let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) =
+            paths.into_iter().partition(|p| p.is_dir());
 
         // Per-host opt-out of the SFTP path: a host whose interactive
         // shell runs INSIDE a container (the startup command enters one)
@@ -199,8 +224,7 @@ impl Oryxis {
         // even with a full-screen program up.
         if !zmodem_drops
             && let Some(ssh) = session.ssh()
-            && let Some(dest) = sidebar_dir
-                .or_else(|| pane.cwd_from_osc7.then(|| pane.cwd.clone()).flatten())
+            && let Some(dest) = pane.cwd_from_osc7.then(|| pane.cwd.clone()).flatten()
         {
             let ssh = Arc::clone(ssh);
             return self.begin_drop_sftp_upload(pane_id, ssh, dest, files, dirs);

@@ -194,6 +194,18 @@ impl Oryxis {
                 // None immediately, so this is harmless overhead.
                 let mut follow_ups: Vec<Task<Message>> = Vec::new();
 
+                // A normal Explorer cannot use winit's OLE drop target
+                // when Oryxis is elevated (UIPI blocks the integrity-level
+                // crossing). The window subclass accepts the classic Shell
+                // drop instead and queues its paths here. Re-enter through
+                // the same message as a regular OS drop so the visible Files
+                // sidebar still owns destination selection and progress.
+                for path in crate::tray::take_elevated_file_drops() {
+                    follow_ups.push(Task::done(Message::Sftp(
+                        crate::app::SftpMessage::SftpFileDropped(path),
+                    )));
+                }
+
                 // One-shot: tag the main window with the JumpList AUMID so
                 // its taskbar button adopts the identity the list is filed
                 // under. Needs the raw HWND, so it hops through

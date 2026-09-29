@@ -17,6 +17,7 @@
 
 #[cfg(target_os = "windows")]
 mod imp {
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     use tray_icon::{
@@ -377,6 +378,15 @@ mod imp {
     /// then stops.
     static HOOK_INSTALLED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
+    /// Gates WM_DROPFILES parsing so normal-integrity windows keep their
+    /// original OLE-only behavior and never interpret an unsolicited
+    /// message as an HDROP handle.
+    static ELEVATED_DROP_ENABLED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    /// Paths received through the classic Shell drop protocol while
+    /// this process is elevated. The Win32 subclass cannot dispatch an
+    /// iced message directly, so the tray heartbeat drains this queue.
+    static ELEVATED_FILE_DROPS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
     /// Push the current `minimize_to_tray` setting down to the
     /// subclass proc. Call on boot and on every toggle, otherwise the
@@ -391,15 +401,27 @@ mod imp {
         NATIVE_HIDE_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Drain paths delivered by the elevated-process drag fallback.
+    /// Each path re-enters the normal SFTP/terminal drop dispatcher so
+    /// sidebar routing, batching and progress UI stay single-sourced.
+    pub fn take_elevated_file_drops() -> Vec<PathBuf> {
+        ELEVATED_FILE_DROPS
+            .lock()
+            .map(|mut paths| std::mem::take(&mut *paths))
+            .unwrap_or_default()
+    }
+
     /// Whether the subclass is already in place. Lets the caller stop
     /// spawning an install task on every heartbeat once it landed.
     pub fn minimize_hook_installed() -> bool {
         HOOK_INSTALLED.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Intercept `WM_SYSCOMMAND` / `SC_MINIMIZE` so the OS minimize
-    /// verbs (taskbar button, Win+Down, the Alt+Space system menu)
-    /// honour minimize-to-tray like our own chrome button does.
+    /// Install the Win32 subclass that handles native minimize and the
+    /// elevated-process file-drop fallback. In a normal process winit's
+    /// OLE drop target remains untouched; in an elevated process UIPI
+    /// blocks that OLE path from a normal Explorer, so we switch this
+    /// window to the classic Shell `WM_DROPFILES` protocol instead.
     ///
     /// The button path routes through `Message::Tabs(TabsMessage::WindowMinimize)`, but
     /// nothing generates that message for a native minimize: winit
@@ -438,8 +460,87 @@ mod imp {
         };
         if ok {
             HOOK_INSTALLED.store(true, std::sync::atomic::Ordering::Relaxed);
+            match process_is_elevated() {
+                Ok(true) => enable_elevated_file_drops(win32.hwnd.get() as _),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    "could not detect elevation for drag-and-drop fallback: {error}"
+                ),
+            }
         }
         ok
+    }
+
+    fn process_is_elevated() -> std::io::Result<bool> {
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows_sys::Win32::Security::{
+            GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+        };
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        unsafe {
+            let mut token: HANDLE = std::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+            let mut returned = 0u32;
+            let ok = GetTokenInformation(
+                token,
+                TokenElevation,
+                std::ptr::addr_of_mut!(elevation).cast(),
+                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                &mut returned,
+            );
+            let error = (ok == 0).then(std::io::Error::last_os_error);
+            CloseHandle(token);
+            match error {
+                Some(error) => Err(error),
+                None => Ok(elevation.TokenIsElevated != 0),
+            }
+        }
+    }
+
+    fn enable_elevated_file_drops(hwnd: windows_sys::Win32::Foundation::HWND) {
+        use windows_sys::Win32::System::Ole::RevokeDragDrop;
+        use windows_sys::Win32::UI::Shell::DragAcceptFiles;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            ChangeWindowMessageFilterEx, MSGFLT_ALLOW, WM_COPYDATA, WM_DROPFILES,
+        };
+
+        // winit registered an OLE IDropTarget when the window was made.
+        // Explorer prefers that target and never falls back to WM_DROPFILES,
+        // so revoke it only for the elevated compatibility path.
+        unsafe {
+            let _ = RevokeDragDrop(hwnd);
+        }
+
+        // WM_COPYGLOBALDATA (0x0049) carries the cross-integrity global
+        // memory block used by the Shell. It is intentionally not a public
+        // Win32 constant, but is part of the established WM_DROPFILES UIPI
+        // compatibility sequence. Keep the filter narrow and per-window.
+        const WM_COPYGLOBALDATA: u32 = 0x0049;
+        for message in [WM_DROPFILES, WM_COPYDATA, WM_COPYGLOBALDATA] {
+            let ok = unsafe {
+                ChangeWindowMessageFilterEx(
+                    hwnd,
+                    message,
+                    MSGFLT_ALLOW,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                tracing::warn!(
+                    "could not allow elevated drag message 0x{message:04X}: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+        unsafe {
+            DragAcceptFiles(hwnd, 1);
+        }
+        ELEVATED_DROP_ENABLED.store(true, std::sync::atomic::Ordering::Release);
+        tracing::info!("enabled elevated Explorer file-drop compatibility");
     }
 
     /// The subclass procedure installed by `install_minimize_hook`.
@@ -453,8 +554,15 @@ mod imp {
     ) -> windows_sys::Win32::Foundation::LRESULT {
         use windows_sys::Win32::UI::Shell::DefSubclassProc;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            ShowWindow, SC_MINIMIZE, SW_HIDE, WM_SYSCOMMAND,
+            ShowWindow, SC_MINIMIZE, SW_HIDE, WM_DROPFILES, WM_SYSCOMMAND,
         };
+
+        if msg == WM_DROPFILES
+            && ELEVATED_DROP_ENABLED.load(std::sync::atomic::Ordering::Acquire)
+        {
+            receive_elevated_file_drop(wparam as _);
+            return 0;
+        }
 
         // The low 4 bits of wParam are reserved for the system on
         // WM_SYSCOMMAND (Windows uses them internally for accelerator
@@ -488,6 +596,38 @@ mod imp {
         // SAFETY: plain forward of the original arguments to the next
         // procedure in the subclass chain.
         unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+
+    fn receive_elevated_file_drop(hdrop: windows_sys::Win32::UI::Shell::HDROP) {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::UI::Shell::{DragFinish, DragQueryFileW};
+
+        let count = unsafe { DragQueryFileW(hdrop, u32::MAX, std::ptr::null_mut(), 0) };
+        let mut dropped = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let len = unsafe { DragQueryFileW(hdrop, index, std::ptr::null_mut(), 0) };
+            if len == 0 {
+                continue;
+            }
+            let mut buffer = vec![0u16; len as usize + 1];
+            let written = unsafe {
+                DragQueryFileW(hdrop, index, buffer.as_mut_ptr(), buffer.len() as u32)
+            };
+            if written != 0 {
+                dropped.push(PathBuf::from(OsString::from_wide(
+                    &buffer[..written as usize],
+                )));
+            }
+        }
+        unsafe {
+            DragFinish(hdrop);
+        }
+        if !dropped.is_empty()
+            && let Ok(mut pending) = ELEVATED_FILE_DROPS.lock()
+        {
+            pending.extend(dropped);
+        }
     }
 
     /// Restore a hidden window: show it, then pull to foreground.
@@ -598,6 +738,11 @@ mod stub {
     /// Stub: no subclass, so a native minimize is never swallowed.
     pub fn take_native_hide() -> bool {
         false
+    }
+
+    /// Stub: the cross-integrity WM_DROPFILES fallback is Windows-only.
+    pub fn take_elevated_file_drops() -> Vec<std::path::PathBuf> {
+        Vec::new()
     }
 
     /// Stub: reports success so the caller stops retrying.
