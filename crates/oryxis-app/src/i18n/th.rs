@@ -2341,7 +2341,13 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         // Hardware security keys (native FIDO2)
         "auth_security_key" => "กุญแจความปลอดภัย",
         "security_key_help" => "จะใช้เฉพาะกุญแจฮาร์ดแวร์นี้ โดยไม่มี agent กุญแจอื่น หรือรหัสผ่านสำรอง หากไม่พบกุญแจหรือปฏิเสธการสัมผัส การเชื่อมต่อจะล้มเหลว",
-        "security_key_none_imported" => "ยังไม่มีกุญแจความปลอดภัยในห้องนิรภัย ให้นำเข้าไฟล์ id_ed25519_sk ที่สร้างโดย ssh-keygen",
+        "security_key_none_imported" => "ยังไม่มีกุญแจความปลอดภัยในห้องนิรภัย ให้นำเข้าไฟล์ id_ed25519_sk / id_ecdsa_sk ที่สร้างโดย ssh-keygen",
+        "sk_pin_title" => "PIN ของกุญแจความปลอดภัย",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "PIN ไม่ถูกต้อง เหลืออีก {n} ครั้งก่อนกุญแจจะถูกล็อก",
+        "sk_touch_notice" => "แตะกุญแจความปลอดภัยเพื่อดำเนินการต่อ",
+        "sk_verify_notice" => "ยืนยันบนกุญแจความปลอดภัย (PIN หรือลายนิ้วมือ) เพื่อดำเนินการต่อ",
+        "security_key_unsupported_platform" => "แพลตฟอร์มนี้ยังลงนามด้วยกุญแจความปลอดภัยไม่ได้ (Windows และ Linux ทำได้) ให้ใช้วิธี Agent กับ ssh-agent ที่ถือกุญแจไว้",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "นำเข้ากุญแจสาธารณะ",
         "key_badge_security_key" => "กุญแจความปลอดภัย",

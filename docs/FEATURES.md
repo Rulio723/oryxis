@@ -15,23 +15,15 @@ coming next, see the [Roadmap](../README.md#roadmap).
   continue through every remaining factor instead of dying on the
   first. A stored TOTP secret answers the verification-code round
   silently; without one, the prompt surfaces the way OpenSSH would.
-- **Security keys, natively.** A YubiKey (or any FIDO2 token) signs in
-  directly: import the `id_ed25519_sk` file `ssh-keygen -t ed25519-sk`
-  produced and Oryxis parses the credential handle and assembles the
-  signature itself, with no `ssh-agent` in the middle. The **Security
-  Key** auth method offers the chosen token and nothing else — no agent
-  sweep, no other key, no password fallback — which is what makes the key
-  a genuine second factor; `Auto` and `Key` also sign with a token handle
-  when that is the key the host names. A missing key, a declined touch
-  and a rejected request each fail with their own message. On Windows the
-  signing goes through the Windows Hello WebAuthn API, so **no
-  administrator prompt**: Windows 10 1903 and later refuse raw USB HID
-  access to a FIDO device from a non-elevated process, which is the same
-  reason OpenSSH for Windows uses that API. A CTAP2-over-HID transport
-  remains for machines without Windows Hello; it needs administrator
-  rights, and the token it was measured against rejects any request
-  larger than a single packet.
-  (Phase 1: USB, `sk-ssh-ed25519@openssh.com`.)
+- **Security keys, natively.** A YubiKey or any FIDO2 token signs in
+  with no `ssh-agent` in between: import the `id_ed25519_sk` or
+  `id_ecdsa_sk` file `ssh-keygen` produced (or point the host at it in
+  `~/.ssh`) and Oryxis asks the token itself, touch prompt and PIN
+  included. The **Security Key** auth method offers that token and
+  nothing else. Windows signs through Windows Hello, so no administrator
+  rights are needed; Linux talks to the token over `hidraw`. Background
+  connections (the MCP server, boot-time forwards, the monitor) never
+  raise a touch prompt nobody asked for.
 - **Full SSH pipeline.** Direct, SOCKS4/5, HTTP CONNECT, ProxyCommand,
   multi-hop jump host chaining, and port forwarding via
   [russh](https://github.com/warp-tech/russh).

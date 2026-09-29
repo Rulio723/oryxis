@@ -1,47 +1,47 @@
 //! The `russh` signer that hands the signing to the token.
 //!
-//! `russh` already has the hook for this: [`russh::Signer`], the trait
-//! the ssh-agent path implements, called once per auth attempt with the
-//! exact bytes OpenSSH would hash. Everything after that — the client
-//! data hash, the CTAP2 round trip, the signature blob — is ours.
+//! `russh` already has the hook: [`russh::Signer`], the trait the agent
+//! path implements, called once per auth attempt with the exact bytes
+//! OpenSSH would hash. The token call runs on a blocking task, because a
+//! person reaching for a key is a multi-second wait and the connection's
+//! own task drives the SSH transport.
 //!
-//! The token call runs on a blocking task. A human staring at "touch your
-//! key" is a multi-second wait, and doing it on the connection's own task
-//! would stall the runtime thread driving the SSH transport.
+//! Dropping the future does not stop a blocking task, so each call carries
+//! a [`CancelToken`] that a guard inside the future fires on drop. That is
+//! what takes a Windows Hello dialog (or a HID wait) down when the dial it
+//! belongs to is aborted: the connect card closed, the pane closed.
 
 use std::sync::Arc;
 
+use oryxis_fido2::{AssertionRequest, Authenticator, CancelToken, Interaction};
 use russh::keys::HashAlg;
 use russh::keys::agent::AgentIdentity;
 use russh::keys::ssh_key::PublicKey;
 
 use super::SkError;
-use super::authenticator::{AssertionRequest, SkAuthenticator};
 use super::credential::SkCredential;
 use super::signature;
 
-/// Signs `sk-ssh-ed25519@openssh.com` userauth requests with a token.
+/// Signs security-key userauth requests with a token.
 pub struct SkSigner {
     credential: SkCredential,
-    authenticator: Arc<dyn SkAuthenticator>,
-    /// The PIN, when the key was made with `-O verify-required`. Phase 1
-    /// carries it through to the authenticator, which refuses it with a
-    /// named error rather than silently dropping it.
-    pin: Option<String>,
+    authenticator: Arc<dyn Authenticator>,
+    /// Events and the PIN source; the cancel token is minted per call.
+    interaction: Interaction,
 }
 
 impl SkSigner {
-    pub fn new(credential: SkCredential, authenticator: Arc<dyn SkAuthenticator>) -> Self {
+    pub fn new(credential: SkCredential, authenticator: Arc<dyn Authenticator>) -> Self {
         Self {
             credential,
             authenticator,
-            pin: None,
+            interaction: Interaction::default(),
         }
     }
 
-    /// Attach the PIN from the vault, if the user stored one.
-    pub fn with_pin(mut self, pin: Option<String>) -> Self {
-        self.pin = pin;
+    /// Where "touch your key" goes, and who is asked for a PIN.
+    pub fn with_interaction(mut self, interaction: Interaction) -> Self {
+        self.interaction = interaction;
         self
     }
 
@@ -56,46 +56,53 @@ impl SkSigner {
     }
 }
 
-/// The whole signing path, without any of the async plumbing: build the
-/// request, ask the token, encode the blob.
-///
-/// Split out from [`russh::Signer::auth_sign`] so it can be tested (and
-/// reasoned about) without a runtime or an `AgentIdentity`, both of which
-/// only exist to satisfy the trait.
+/// The whole signing path without the async plumbing: build the request,
+/// ask the token, frame the answer. Split out so it tests without a
+/// runtime or an `AgentIdentity`, which only exist to satisfy the trait.
 fn sign_with(
     credential: &SkCredential,
-    authenticator: &dyn SkAuthenticator,
-    pin: Option<&str>,
+    authenticator: &dyn Authenticator,
+    interaction: &Interaction,
     mut to_sign: Vec<u8>,
 ) -> Result<Vec<u8>, SkError> {
     let request = AssertionRequest {
         application: credential.application().to_string(),
-        // OpenSSH hands us the userauth blob itself; each transport hashes
-        // it its own way, so what travels here is the message.
+        // Each transport hashes the message its own way.
         message: to_sign.clone(),
-        // A resident credential has no handle; asking with an empty
-        // allow-list is what makes the token search its own store.
-        key_handle: (!credential.is_resident()).then(|| credential.key_handle().to_vec()),
-        require_user_presence: credential.require_user_presence(),
-        require_user_verification: credential.require_user_verification(),
-        pin: pin.map(str::to_string),
+        // The handle whenever the file has one, resident or not: with no
+        // allow-list a token holding several discoverable credentials for
+        // "ssh:" answers with whichever it likes, and a signature from the
+        // wrong one fails on the server for no visible reason.
+        allow_credential: (!credential.key_handle().is_empty())
+            .then(|| credential.key_handle().to_vec()),
+        user_presence: credential.require_user_presence(),
+        user_verification: credential.require_user_verification(),
     };
-    let assertion = authenticator.get_assertion(&request)?;
-    let signature = signature::encode_sk_ed25519_signature(
+    let assertion = authenticator.get_assertion(&request, interaction)?;
+    let signature = signature::encode_sk_signature(
+        credential.algorithm(),
         &assertion.signature,
         assertion.flags,
         assertion.counter,
     )?;
 
     // `russh::Signer` follows the ssh-agent contract: the return value is
-    // the original userauth data with one SSH `string` signature appended,
-    // not the signature blob by itself. `russh` later strips the session-id
-    // prefix and writes the remaining packet. Returning only `signature`
-    // makes it slice that blob at the old prefix offset, producing a
-    // malformed USERAUTH_REQUEST after the token was touched successfully.
+    // the userauth data with one SSH `string` signature appended, not the
+    // blob by itself. `russh` strips the session-id prefix afterwards.
     to_sign.extend_from_slice(&(signature.len() as u32).to_be_bytes());
     to_sign.extend_from_slice(&signature);
     Ok(to_sign)
+}
+
+/// Cancels the token request when the signing future is dropped.
+struct CancelOnDrop(CancelToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        // After a finished call this is a no-op: the transports unhook
+        // their cancel paths when they return.
+        self.0.cancel();
+    }
 }
 
 impl russh::Signer for SkSigner {
@@ -107,14 +114,17 @@ impl russh::Signer for SkSigner {
         _hash_alg: Option<HashAlg>,
         to_sign: Vec<u8>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
-        // Everything the blocking task needs, owned: the credential is
-        // small and the token call must not borrow the connection.
         let credential = self.credential.clone();
         let authenticator = Arc::clone(&self.authenticator);
-        let pin = self.pin.clone();
+        let cancel = CancelToken::new();
+        let interaction = Interaction {
+            cancel: cancel.clone(),
+            ..self.interaction.clone()
+        };
         async move {
+            let _cancel_on_drop = CancelOnDrop(cancel);
             tokio::task::spawn_blocking(move || {
-                sign_with(&credential, authenticator.as_ref(), pin.as_deref(), to_sign)
+                sign_with(&credential, authenticator.as_ref(), &interaction, to_sign)
             })
             .await
             .map_err(|e| SkError::Internal(format!("security-key signing task failed: {e}")))?
@@ -125,38 +135,36 @@ impl russh::Signer for SkSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sk::authenticator::Assertion;
     use crate::sk::credential::fixture;
     use crate::sk::signature::signing_input;
     use ed25519_dalek::{Signer as _, SigningKey, Verifier as _};
+    use oryxis_fido2::Assertion;
 
-    /// A software stand-in for a FIDO2 token: it holds the Ed25519
-    /// private half and answers exactly the way a real token does,
-    /// signing `SHA256(application) || flags || counter || clientDataHash`.
-    ///
-    /// This is what makes the wire format testable without hardware — and
-    /// the verification below is OpenSSH's own reconstruction, so a
-    /// mismatch in any field fails here rather than at a customer's
-    /// server.
+    /// A software stand-in for a FIDO2 token: it holds the private half and
+    /// signs `SHA256(application) || flags || counter || clientDataHash`,
+    /// exactly what a real token signs. The verification below is
+    /// OpenSSH's reconstruction, so a mismatch in any field fails here
+    /// rather than at a server.
     struct SoftToken {
         signing_key: SigningKey,
         handle: Vec<u8>,
         counter: u32,
-        /// What the test asserts the request must carry.
-        expected_application: String,
         expected_message: Vec<u8>,
     }
 
-    impl SkAuthenticator for SoftToken {
-        fn get_assertion(&self, request: &AssertionRequest) -> Result<Assertion, SkError> {
-            assert_eq!(request.application, self.expected_application);
+    impl Authenticator for SoftToken {
+        fn get_assertion(
+            &self,
+            request: &AssertionRequest,
+            _: &Interaction,
+        ) -> Result<Assertion, oryxis_fido2::Error> {
+            assert_eq!(request.application, "ssh:");
             assert_eq!(request.message, self.expected_message);
-            assert_eq!(request.key_handle.as_deref(), Some(self.handle.as_slice()));
-            assert!(request.require_user_presence);
-            assert!(!request.require_user_verification);
-            assert!(request.pin.is_none());
+            assert_eq!(request.allow_credential.as_deref(), Some(self.handle.as_slice()));
+            assert!(request.user_presence);
+            assert!(!request.user_verification);
 
-            let flags = 0x01; // user present
+            let flags = 0x01;
             let input = signing_input(
                 &request.application,
                 flags,
@@ -171,8 +179,6 @@ mod tests {
         }
     }
 
-    /// The whole point of the module: a blob the token produced verifies
-    /// against the public key we offered, under OpenSSH's reconstruction.
     #[test]
     fn the_token_signature_verifies_like_openssh_verifies_it() {
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);
@@ -181,38 +187,31 @@ mod tests {
         let text = fixture::sk_private_key(public, fixture::USER_PRESENCE, &handle);
         let credential = SkCredential::from_openssh_private(&text).unwrap();
 
-        // `to_sign` is whatever russh hands us; a realistic shape is
-        // session_id + userauth request, but any bytes exercise the path.
         let to_sign = b"session-id + ssh-userauth publickey request".to_vec();
         let token = SoftToken {
             signing_key: signing_key.clone(),
-            handle: handle.clone(),
+            handle,
             counter: 12,
-            expected_application: "ssh:".to_string(),
             expected_message: to_sign.clone(),
         };
 
-        let signed = sign_with(&credential, &token, None, to_sign.clone()).unwrap();
+        let signed =
+            sign_with(&credential, &token, &Interaction::default(), to_sign.clone()).unwrap();
 
-        // The external-signer contract preserves every byte russh asked us
-        // to sign and appends one length-prefixed signature field.
+        // Every byte russh asked us to sign survives, plus one field.
         assert_eq!(&signed[..to_sign.len()], to_sign.as_slice());
         let (blob, rest) = read_string(&signed[to_sign.len()..]);
         assert!(rest.is_empty(), "exactly one signature field is appended");
 
-        // Parse the blob the way OpenSSH does: algorithm, signature,
-        // flags, counter.
         let (algorithm, rest) = read_string(blob);
         assert_eq!(algorithm, signature::SK_ED25519.as_bytes());
         let (signature, rest) = read_string(rest);
         assert_eq!(signature.len(), 64);
         let flags = rest[0];
         let counter = u32::from_be_bytes(rest[1..5].try_into().unwrap());
-        assert_eq!(flags, 0x01);
-        assert_eq!(counter, 12);
+        assert_eq!((flags, counter), (0x01, 12));
         assert_eq!(rest.len(), 5, "nothing may follow the counter");
 
-        // And verify it the way OpenSSH does.
         let input = signing_input("ssh:", flags, counter, &signature::sha256(&to_sign));
         signing_key
             .verifying_key()
@@ -223,14 +222,71 @@ mod tests {
             .expect("the token's signature must verify over OpenSSH's signed string");
     }
 
-    /// A token that answers with something other than 64 bytes must be
-    /// refused before it reaches the wire.
+    /// The same end-to-end check for `sk-ecdsa-sha2-nistp256`, verified
+    /// through `ssh-key`'s own security-key verifier, which rebuilds the
+    /// signed string the way OpenSSH's `sk_ecdsa_verify` does.
+    #[test]
+    fn an_ecdsa_token_signature_verifies_through_ssh_key() {
+        use p256::ecdsa::signature::Signer as _;
+
+        struct EcdsaToken(p256::ecdsa::SigningKey);
+        impl Authenticator for EcdsaToken {
+            fn get_assertion(
+                &self,
+                request: &AssertionRequest,
+                _: &Interaction,
+            ) -> Result<Assertion, oryxis_fido2::Error> {
+                let input = signing_input(
+                    &request.application,
+                    0x01,
+                    5,
+                    &signature::sha256(&request.message),
+                );
+                let sig: p256::ecdsa::Signature = self.0.sign(&input);
+                Ok(Assertion {
+                    signature: sig.to_der().as_bytes().to_vec(),
+                    flags: 0x01,
+                    counter: 5,
+                })
+            }
+        }
+
+        let signing_key = p256::ecdsa::SigningKey::from_slice(&[6u8; 32]).unwrap();
+        let point = signing_key.verifying_key().to_sec1_point(false);
+        let text =
+            fixture::sk_ecdsa_private_key(point.as_bytes(), fixture::USER_PRESENCE, &[9, 9, 9]);
+        let credential = SkCredential::from_openssh_private(&text).unwrap();
+
+        let to_sign = b"userauth request".to_vec();
+        let signed = sign_with(
+            &credential,
+            &EcdsaToken(signing_key),
+            &Interaction::default(),
+            to_sign.clone(),
+        )
+        .unwrap();
+        let (blob, _) = read_string(&signed[to_sign.len()..]);
+        let parsed = russh::keys::ssh_key::Signature::try_from(blob).unwrap();
+        // Fully qualified: `PublicKey` also has an inherent `verify`, for
+        // `ssh-keygen -Y` blobs rather than auth signatures.
+        <PublicKey as ed25519_dalek::Verifier<russh::keys::ssh_key::Signature>>::verify(
+            credential.public_key(),
+            &to_sign,
+            &parsed,
+        )
+        .expect("ssh-key verifies the framed ECDSA-SK signature");
+    }
+
     #[test]
     fn a_short_signature_is_refused() {
         struct Truncating(SoftToken);
-        impl SkAuthenticator for Truncating {
-            fn get_assertion(&self, request: &AssertionRequest) -> Result<Assertion, SkError> {
-                let mut assertion = self.0.get_assertion(request)?;
+        impl Authenticator for Truncating {
+            fn get_assertion(
+                &self,
+                request: &AssertionRequest,
+                interaction: &Interaction,
+            ) -> Result<Assertion, oryxis_fido2::Error> {
+                let mut assertion = self.0.get_assertion(request, interaction)?;
                 assertion.signature.truncate(32);
                 Ok(assertion)
             }
@@ -246,24 +302,25 @@ mod tests {
             signing_key,
             handle,
             counter: 0,
-            expected_application: "ssh:".to_string(),
             expected_message: to_sign.clone(),
         });
 
-        let err = sign_with(&credential, &token, None, to_sign).unwrap_err();
+        let err = sign_with(&credential, &token, &Interaction::default(), to_sign).unwrap_err();
         assert!(matches!(err, SkError::Malformed(_)), "got {err:?}");
     }
 
-    /// A resident credential must be asked for without an allow-list.
+    /// A resident credential is still addressed by its handle: a token
+    /// with several discoverable "ssh:" credentials must sign with THIS one.
     #[test]
-    fn a_resident_credential_drops_the_allow_list() {
-        struct ResidentCheck;
-        impl SkAuthenticator for ResidentCheck {
-            fn get_assertion(&self, request: &AssertionRequest) -> Result<Assertion, SkError> {
-                assert!(
-                    request.key_handle.is_none(),
-                    "a discoverable credential must not be addressed by handle"
-                );
+    fn a_resident_credential_is_still_asked_for_by_handle() {
+        struct HandleCheck;
+        impl Authenticator for HandleCheck {
+            fn get_assertion(
+                &self,
+                request: &AssertionRequest,
+                _: &Interaction,
+            ) -> Result<Assertion, oryxis_fido2::Error> {
+                assert_eq!(request.allow_credential.as_deref(), Some(&[7u8, 7][..]));
                 Ok(Assertion {
                     signature: vec![0u8; 64],
                     flags: 0x01,
@@ -272,19 +329,53 @@ mod tests {
             }
         }
 
-        let public = SigningKey::from_bytes(&[3u8; 32])
-            .verifying_key()
-            .to_bytes();
-        let text = fixture::sk_private_key(public, fixture::USER_PRESENCE | fixture::RESIDENT, &[]);
+        let public = SigningKey::from_bytes(&[3u8; 32]).verifying_key().to_bytes();
+        let text =
+            fixture::sk_private_key(public, fixture::USER_PRESENCE | fixture::RESIDENT, &[7, 7]);
         let credential = SkCredential::from_openssh_private(&text).unwrap();
         assert!(credential.is_resident());
-        sign_with(&credential, &ResidentCheck, None, b"x".to_vec()).unwrap();
+        sign_with(&credential, &HandleCheck, &Interaction::default(), b"x".to_vec()).unwrap();
     }
 
-    /// SSH `string` reader for the test's own blob parse.
-    fn read_string(mut bytes: &[u8]) -> (&[u8], &[u8]) {
+    /// Dropping the signing future (the dial was aborted) cancels the
+    /// blocking token call instead of leaving it waiting for a touch.
+    #[tokio::test]
+    async fn dropping_the_future_cancels_the_token_request() {
+        use russh::Signer as _;
+
+        struct WaitsForCancel(std::sync::mpsc::Sender<()>);
+        impl Authenticator for WaitsForCancel {
+            fn get_assertion(
+                &self,
+                _: &AssertionRequest,
+                interaction: &Interaction,
+            ) -> Result<Assertion, oryxis_fido2::Error> {
+                while !interaction.cancel.is_cancelled() {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                let _ = self.0.send(());
+                Err(oryxis_fido2::Error::Cancelled)
+            }
+        }
+
+        let public = SigningKey::from_bytes(&[4u8; 32]).verifying_key().to_bytes();
+        let text = fixture::sk_private_key(public, fixture::USER_PRESENCE, &[1]);
+        let credential = SkCredential::from_openssh_private(&text).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut signer = SkSigner::new(credential.clone(), Arc::new(WaitsForCancel(tx)));
+        let identity = AgentIdentity::from(credential.public_key().clone());
+
+        let signing = signer.auth_sign(&identity, None, b"x".to_vec());
+        let timed_out =
+            tokio::time::timeout(std::time::Duration::from_millis(50), signing).await;
+        assert!(timed_out.is_err(), "the token never answered");
+        // The timeout dropped the future; the blocking call must notice.
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the token request was cancelled");
+    }
+
+    fn read_string(bytes: &[u8]) -> (&[u8], &[u8]) {
         let len = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
-        bytes = &bytes[4..];
-        bytes.split_at(len)
+        bytes[4..].split_at(len)
     }
 }

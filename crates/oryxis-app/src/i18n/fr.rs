@@ -2301,7 +2301,13 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         // Hardware security keys (native FIDO2)
         "auth_security_key" => "Clé de sécurité",
         "security_key_help" => "Seule cette clé matérielle sera proposée : aucun agent, aucune autre clé et aucun mot de passe de secours. Si la clé est absente ou si le toucher est refusé, la connexion échoue.",
-        "security_key_none_imported" => "Aucune clé de sécurité n'est encore dans le coffre. Importez le fichier id_ed25519_sk créé par ssh-keygen.",
+        "security_key_none_imported" => "Aucune clé de sécurité n'est encore dans le coffre. Importez le fichier id_ed25519_sk / id_ecdsa_sk créé par ssh-keygen.",
+        "sk_pin_title" => "PIN de la clé de sécurité",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "PIN incorrect. Il reste {n} tentatives avant le verrouillage de la clé.",
+        "sk_touch_notice" => "Touchez votre clé de sécurité pour continuer",
+        "sk_verify_notice" => "Vérifiez sur votre clé de sécurité (PIN ou empreinte) pour continuer",
+        "security_key_unsupported_platform" => "Cette plateforme ne peut pas encore signer avec une clé de sécurité (Windows et Linux le peuvent). Utilisez la méthode Agent avec un ssh-agent qui détient la clé.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importer une clé publique",
         "key_badge_security_key" => "Clé de sécurité",

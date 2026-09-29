@@ -2335,7 +2335,13 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         // Hardware security keys (native FIDO2)
         "auth_security_key" => "Kunci keamanan",
         "security_key_help" => "Hanya kunci perangkat keras ini yang ditawarkan: tanpa agen, kunci lain, atau sandi cadangan. Jika kunci tidak ada atau sentuhan ditolak, koneksi akan gagal.",
-        "security_key_none_imported" => "Belum ada kunci keamanan di brankas. Impor berkas id_ed25519_sk yang dibuat oleh ssh-keygen.",
+        "security_key_none_imported" => "Belum ada kunci keamanan di brankas. Impor berkas id_ed25519_sk / id_ecdsa_sk yang dibuat oleh ssh-keygen.",
+        "sk_pin_title" => "PIN kunci keamanan",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "PIN salah. Tersisa {n} percobaan sebelum kunci terkunci.",
+        "sk_touch_notice" => "Sentuh kunci keamanan Anda untuk melanjutkan",
+        "sk_verify_notice" => "Verifikasi di kunci keamanan Anda (PIN atau sidik jari) untuk melanjutkan",
+        "security_key_unsupported_platform" => "Platform ini belum bisa menandatangani dengan kunci keamanan (Windows dan Linux bisa). Gunakan metode Agent dengan ssh-agent yang menyimpan kunci tersebut.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Impor kunci publik",
         "key_badge_security_key" => "Kunci keamanan",

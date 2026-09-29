@@ -664,6 +664,9 @@ impl Oryxis {
                     crate::i18n::t("auth_password_prompt_title").to_string(),
                     crate::i18n::t("password").to_string(),
                 )
+                // The user just toggled this rule on, so a touch may be
+                // asked for (the boot sweep above never passes this).
+                .with_security_key_prompts(crate::connect_methods::security_key_prompts(None))
                 .with_keepalive(keepalive)
                 .with_address_family(conn.address_family)
                 .with_rekey_limit_mb(conn.rekey_limit_mb)

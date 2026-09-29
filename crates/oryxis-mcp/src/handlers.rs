@@ -337,21 +337,30 @@ fn resolve_credentials(
     // must not fail here for want of a key source. Its certificate is
     // the `<key>-cert.pub` sibling, so the pair still describes ONE key.
     //
-    // `SecurityKey` is excluded for the same reason it is in the app:
-    // the scan is for keys that work without hardware, so it could only
-    // hand this mode a software key the engine must then reject. The
-    // host's own vault row (above) is where a token handle comes from.
+    // The MCP never offers a security-key file off disk to a Key / Auto
+    // host: it runs unattended, so the engine would refuse to ask for the
+    // touch anyway. A `SecurityKey` host resolves its `_sk` file so the
+    // refusal it gets names the real reason (nobody at the keyboard)
+    // rather than a missing key.
+    use oryxis_core::models::connection::AuthMethod;
     let (final_key, final_cert) = match final_key {
         Some(pem) => (Some(pem), final_cert),
         None if matches!(
             conn.auth_method,
-            oryxis_core::models::connection::AuthMethod::Key
-                | oryxis_core::models::connection::AuthMethod::Auto
-                | oryxis_core::models::connection::AuthMethod::Certificate
+            AuthMethod::Key | AuthMethod::Auto | AuthMethod::Certificate | AuthMethod::SecurityKey
         ) =>
         {
-            match oryxis_vault::resolve_disk_key(conn.use_disk_key, conn.identity_file.as_deref())
-                .material()
+            let wanted = if conn.auth_method == AuthMethod::SecurityKey {
+                oryxis_vault::DiskKeyWanted::SecurityKey
+            } else {
+                oryxis_vault::DiskKeyWanted::Software
+            };
+            match oryxis_vault::resolve_disk_key(
+                conn.use_disk_key,
+                conn.identity_file.as_deref(),
+                wanted,
+            )
+            .material()
             {
                 Some((pem, disk_cert)) => (Some(pem), disk_cert),
                 None => (None, final_cert),

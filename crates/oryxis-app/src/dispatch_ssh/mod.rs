@@ -112,7 +112,8 @@ impl Oryxis {
             | SshMessage::SshBanner(..)
             | SshMessage::SshPaneBanner(..)
             | SshMessage::SshProxyOutput(..)
-            | SshMessage::SshPaneProxyOutput(..)) => self.handle_ssh_progress(m),
+            | SshMessage::SshPaneProxyOutput(..)
+            | SshMessage::SshPaneSecurityKey(..)) => self.handle_ssh_progress(m),
             m @ (SshMessage::SshConnected(..)
             | SshMessage::OsDetected(..)
             | SshMessage::ReuseFailedDialFresh(..)

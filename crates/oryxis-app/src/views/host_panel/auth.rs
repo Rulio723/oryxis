@@ -6,16 +6,20 @@ impl Oryxis {
     pub(super) fn hp_row_auth_method(&self, is_ssh: bool) -> Element<'_, Message> {
         // Auth method (SSH > Authentication). Left/Right cycle the same
         // options the pick_list offers.
-        let auth_options = vec![
+        let mut auth_options = vec![
             t("auth_auto").to_string(),
             t("auth_password").to_string(),
             t("auth_key").to_string(),
-            t("auth_security_key").to_string(),
+        ];
+        if crate::util::security_key_method_offered(&self.editor_form.auth_method) {
+            auth_options.push(t("auth_security_key").to_string());
+        }
+        auth_options.extend([
             t("auth_certificate").to_string(),
             t("auth_agent").to_string(),
             t("auth_interactive").to_string(),
             t("auth_password_prompt").to_string(),
-        ];
+        ]);
         let auth_selected = crate::util::auth_method_label(&self.editor_form.auth_method);
         // Focusable select: Tab reaches it, Enter/Space open it, the
         // widget owns arrows/Esc while focused (fork support).
@@ -161,8 +165,8 @@ impl Oryxis {
             // explains the preferred-identity pick and how hardware keys
             // reach the agent (FIDO2 / PKCS#11 delegation). Under
             // `SecurityKey` it states that nothing but the token is
-            // offered, and — when no signable hardware key is in the
-            // vault — which file to import to get one.
+            // offered and, when no signable hardware key is in the vault,
+            // which file to import to get one.
             let cert_hint: Option<Element<'_, Message>> = if agent_mode {
                 Some(
                     iced::widget::Column::new()
@@ -196,12 +200,33 @@ impl Oryxis {
                 // with, so the pick list stays empty and the reason has
                 // to be on screen. Naming the file to import is the whole
                 // fix, so the hint says which one.
+                // A `_sk` file picked up from `~/.ssh` counts as well: the
+                // hint is about having SOMETHING the token can sign with.
                 let signable = self
                     .keys
                     .iter()
-                    .any(|k| k.algorithm.is_security_key() && k.has_private);
+                    .any(|k| k.algorithm.is_security_key() && k.has_private)
+                    || matches!(
+                        self.editor_form.disk_key_status,
+                        oryxis_vault::DiskKeyStatus::Ready { .. }
+                    );
                 let mut col = iced::widget::Column::new();
-                if !signable {
+                if !oryxis_ssh::sk::native_signing_supported() {
+                    // A host synced from a machine that can drive a token,
+                    // opened on one that cannot: say so rather than let the
+                    // connect fail with a transport error.
+                    col = col
+                        .push(
+                            container(
+                                text(t("security_key_unsupported_platform"))
+                                    .size(11)
+                                    .color(OryxisColors::t().warning),
+                            )
+                            .width(Length::Fill)
+                            .align_x(dir_align_x()),
+                        )
+                        .push(Space::new().height(2));
+                } else if !signable {
                     col = col
                         .push(
                             container(
@@ -330,12 +355,13 @@ impl Oryxis {
     /// resolves to.
     ///
     /// Shown for the methods that offer a key at all (`Key` / `Auto` /
-    /// `Certificate`, the same gate `resolve_credentials` applies), and
-    /// not under `Agent`, whose key lives in the agent process, nor
-    /// under `SecurityKey`, where the disk scan cannot produce the
-    /// token-backed key the method requires. It sits below the
-    /// vault-key picker because that is the precedence: the disk fills
-    /// the gap the vault leaves, never the other way round.
+    /// `Certificate` / `SecurityKey`, the gate `resolve_credentials`
+    /// applies), and
+    /// not under `Agent`, whose key lives in the agent process. Under
+    /// `SecurityKey` the scan reads only the `_sk` files
+    /// (`connect_methods::disk_key_wanted`). It sits below the vault-key
+    /// picker because that is the precedence: the disk fills the gap the
+    /// vault leaves, never the other way round.
     ///
     /// The status line is the half that matters. A key that is present
     /// but unusable (passphrase-protected, most often) used to be
@@ -347,7 +373,7 @@ impl Oryxis {
         let cert_mode = self.editor_form.auth_method == AuthMethod::Certificate;
         let offers_key = matches!(
             self.editor_form.auth_method,
-            AuthMethod::Key | AuthMethod::Auto | AuthMethod::Certificate
+            AuthMethod::Key | AuthMethod::Auto | AuthMethod::Certificate | AuthMethod::SecurityKey
         );
         if !is_ssh || !offers_key || self.editor_form.selected_identity.is_some() {
             return empty();

@@ -8,7 +8,7 @@ mod disk;
 mod pem;
 mod ppk;
 
-pub use disk::{resolve_disk_key, DiskKey, DiskKeyStatus};
+pub use disk::{resolve_disk_key, DiskKey, DiskKeyStatus, DiskKeyWanted};
 pub use pem::is_traditional_encrypted;
 
 /// Generated key pair, private PEM + SshKey model.
@@ -224,13 +224,12 @@ pub fn import_key(
 /// than silently mislabeling them.
 ///
 /// Security keys take this path too, and that is deliberate. An
-/// `id_ed25519_sk` file is an OpenSSH *private* key file whose body is
-/// not a private scalar but a FIDO2 credential handle plus the
-/// application string and flags; the Ed25519 scalar never leaves the
-/// token. Storing it here is what lets the app sign natively later —
-/// but it is emphatically not software key material, so the row is
-/// marked as such (see `expose_via_agent` below) and every consumer
-/// that assumes a scalar must keep its hands off it.
+/// `id_ed25519_sk` / `id_ecdsa_sk` file is an OpenSSH PRIVATE key file
+/// whose body is not a private scalar but a FIDO2 credential handle plus
+/// the application string and flags; the scalar never leaves the token.
+/// Storing it is what lets the app sign natively, but it is not software
+/// key material, so the row stays out of the agent (see `expose_via_agent`
+/// below) and every consumer that assumes a scalar must keep off it.
 fn finalize(label: &str, private_key: PrivateKey) -> Result<GeneratedKey, VaultError> {
     let public_key = private_key.public_key();
     let fingerprint = public_key.fingerprint(HashAlg::Sha256).to_string();
@@ -432,9 +431,9 @@ mod tests {
 
     /// Encode an `id_ed25519_sk` file the way `ssh-keygen -t ed25519-sk`
     /// does. The body is a credential handle plus the application string
-    /// and flags — there is no Ed25519 scalar in it at all, which is the
-    /// whole point of the format and the reason a "private key import"
-    /// must not be treated as software key material.
+    /// and flags, with no Ed25519 scalar in it at all, which is the whole
+    /// point of the format and why this "private key import" must not be
+    /// treated as software key material.
     fn sk_ed25519_private(public: [u8; 32], flags: u8, handle: &[u8]) -> String {
         use ssh_key::private::{KeypairData, SkEd25519};
         use ssh_key::public::{Ed25519PublicKey, SkEd25519 as SkEd25519Public};
@@ -512,10 +511,8 @@ mod tests {
         assert!(!imported.key.expose_via_agent);
     }
 
-    /// `sk-ecdsa-sha2-nistp256` is the other security-key family. Phase 1
-    /// authenticates with Ed25519 only, but the import must still label it
-    /// honestly instead of rejecting the file outright — a user pasting
-    /// their key should learn *why* it will not sign, not lose the key.
+    /// `sk-ecdsa-sha2-nistp256` is the other security-key family, and it
+    /// imports the same way: labelled as what it is, handle kept.
     #[test]
     fn import_security_key_maps_the_ecdsa_family() {
         use ssh_key::private::{KeypairData, SkEcdsaSha2NistP256};

@@ -1,27 +1,29 @@
-//! Real-hardware acceptance harness for native FIDO2 security-key auth.
+//! Real-hardware acceptance check for native security-key signing.
 //!
-//! Step 4 of the FIDO2 plan is "does it work on a real token". This drives
-//! a physical security key through the *same* code the SSH client uses,
-//! then verifies the result with `ssh_key`'s own
-//! `sk-ssh-ed25519@openssh.com` verifier — the same reconstruction
-//! OpenSSH's `sk_ed25519_verify` performs. No ssh-agent, no server, no
-//! network: if this passes and a login with the same key still fails, the
-//! fault is above the token.
+//! Drives a physical key through the SAME code the SSH client uses, then
+//! verifies the result with `ssh-key`'s own security-key verifier, the
+//! reconstruction OpenSSH's `sk_*_verify` performs. No agent, no server,
+//! no network: if this passes and a login with the same key still fails,
+//! the fault is above the token.
 //!
-//! On Windows an ordinary process goes through Windows Hello. An elevated
-//! process uses direct USB HID so both transport choices can be checked with
-//! the same executable.
+//! On Windows an ordinary process goes through Windows Hello and an
+//! elevated one through direct USB HID, so running it both ways checks
+//! both transports. On Linux it reads `/dev/hidraw*`.
 //!
 //! ```text
 //! cargo run -p oryxis-ssh --example sk_acceptance -- ~/.ssh/id_ed25519_sk
 //! ```
 //!
-//! It is a manual, hardware-dependent check, which is why it is an example
-//! and not a test: `cargo test` has to stay hermetic.
+//! A manual, hardware-dependent check, which is why it is an example and
+//! not a test: `cargo test` stays hermetic.
 
 use std::process::ExitCode;
 
-use oryxis_ssh::sk::{SkCredential, SkError, SkSigner, platform_authenticator};
+use std::io::Write as _;
+use std::sync::Arc;
+
+use oryxis_fido2::{Interaction, PinPrompt, TokenEvent};
+use oryxis_ssh::sk::{SkCredential, SkError, SkSigner};
 use russh::Signer as _;
 use russh::keys::agent::AgentIdentity;
 use russh::keys::ssh_key::{PublicKey, Signature};
@@ -35,14 +37,14 @@ async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("oryxis_ssh=debug")),
+                .unwrap_or_else(|_| EnvFilter::new("oryxis_ssh=debug,oryxis_fido2=debug")),
         )
         .with_target(false)
         .without_time()
         .init();
 
     let Some(path) = std::env::args().nth(1) else {
-        eprintln!("usage: sk_acceptance <path to an id_ed25519_sk file>");
+        eprintln!("usage: sk_acceptance <path to an id_ed25519_sk / id_ecdsa_sk file>");
         eprintln!("       (the private file `ssh-keygen -t ed25519-sk` wrote, not the .pub)");
         return ExitCode::from(2);
     };
@@ -64,43 +66,49 @@ async fn main() -> ExitCode {
         }
     };
     println!("[2/4] parsed the security-key credential");
-    println!(
-        "      algorithm      : {}",
-        credential.public_key().algorithm().as_str()
-    );
+    println!("      algorithm      : {}", credential.public_key().algorithm().as_str());
     println!("      application    : {:?}", credential.application());
     println!(
         "      credential     : {} byte handle{}",
         credential.key_handle().len(),
         if credential.is_resident() {
-            " (resident: the token holds it)"
+            " (resident)"
         } else {
             ""
         }
     );
-    println!(
-        "      touch required : {}",
-        credential.require_user_presence()
-    );
-    println!(
-        "      PIN required   : {}",
-        credential.require_user_verification()
-    );
+    println!("      touch required : {}", credential.require_user_presence());
+    println!("      PIN required   : {}", credential.require_user_verification());
     println!("      fingerprint    : {}", credential.fingerprint());
 
     // The bytes `russh` would hand to `Signer::auth_sign` for a publickey
-    // attempt with this key. The signature covers whatever we pass, so the
-    // shape is not itself under test — but using the real one means a
-    // mistake in how the public key gets spliced in surfaces here rather
-    // than at a server.
+    // attempt with this key. Using the real shape means a mistake in how
+    // the public key is spliced in surfaces here rather than at a server.
     let to_sign = userauth_request("root", &[0x5a; 32], credential.public_key());
 
     println!();
-    println!("[3/4] talking to the token (Windows Hello on Windows, USB HID elsewhere)");
-    println!("      >>> touch your security key now <<<");
+    println!("[3/4] talking to the token");
     println!();
 
-    let mut signer = SkSigner::new(credential.clone(), platform_authenticator());
+    let interaction = Interaction {
+        events: Some(Arc::new(|event| match event {
+            TokenEvent::TouchNeeded => println!("      >>> touch your security key now <<<"),
+            TokenEvent::VerificationNeeded => println!("      >>> verify on your security key <<<"),
+        })),
+        pin: Some(Arc::new(|prompt: PinPrompt| {
+            if prompt.retry {
+                println!("      wrong PIN ({:?} attempts left)", prompt.retries);
+            }
+            print!("      security key PIN: ");
+            std::io::stdout().flush().ok()?;
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).ok()?;
+            Some(zeroize::Zeroizing::new(line.trim_end().to_string()))
+        })),
+        ..Interaction::default()
+    };
+    let mut signer = SkSigner::new(credential.clone(), oryxis_fido2::platform_authenticator())
+        .with_interaction(interaction);
     let identity = AgentIdentity::from(credential.public_key().clone());
     let signed = match signer.auth_sign(&identity, None, to_sign.clone()).await {
         Ok(signed) => signed,
@@ -131,17 +139,13 @@ async fn main() -> ExitCode {
         }
     };
 
-    // `Signature` keeps the security-key tail (`sig || flags || counter`)
-    // as its payload — exactly the five bytes OpenSSH appends after a
-    // plain Ed25519 signature.
-    let raw = signature.as_bytes();
-    let (signature_bytes, tail) = raw.split_at(raw.len() - 5);
+    // The blob ends in the security-key tail: flags, then the counter.
+    let tail = &field[field.len() - 5..];
     let flags = tail[0];
     let counter = u32::from_be_bytes(tail[1..5].try_into().expect("four bytes"));
 
-    println!("[4/4] verifying the way OpenSSH's `sk_ed25519_verify` does");
+    println!("[4/4] verifying the way OpenSSH's `sk_*_verify` does");
     println!("      signature algo : {}", signature.algorithm().as_str());
-    println!("      raw signature  : {} bytes", signature_bytes.len());
     println!(
         "      flags          : 0x{flags:02x} (user present: {}, user verified: {})",
         flags & 0x01 != 0,
@@ -149,10 +153,8 @@ async fn main() -> ExitCode {
     );
     println!("      counter        : {counter}");
 
-    // Fully qualified: `PublicKey` also has an inherent `verify`, and that
-    // one is about `ssh-keygen -Y sign` blobs, not SSH auth signatures.
-    // The trait method is the one that rebuilds the security-key signed
-    // string, so it has to be named explicitly.
+    // Fully qualified: `PublicKey` also has an inherent `verify`, for
+    // `ssh-keygen -Y` blobs rather than SSH auth signatures.
     if let Err(err) = <PublicKey as ed25519_dalek::Verifier<Signature>>::verify(
         credential.public_key(),
         &to_sign,
@@ -169,19 +171,26 @@ async fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Keep hardware/transport failures distinguishable when an elevated test
-/// runs in a short-lived console whose text cannot be captured by its parent.
+/// Keep failures distinguishable when an elevated run happens in a
+/// short-lived console whose text the parent cannot capture.
 fn sk_error_exit_code(error: &SkError) -> ExitCode {
+    use oryxis_fido2::Error as Token;
     let code = match error {
-        SkError::DeviceNotFound(_) => 10,
-        SkError::Transport(_) => 11,
-        SkError::PinRequired | SkError::UserVerificationUnavailable => 12,
-        SkError::TouchTimeout | SkError::Cancelled => 13,
-        SkError::CredentialNotFound => 14,
-        SkError::Malformed(_) => 15,
+        SkError::Token(Token::DeviceNotFound(_) | Token::Unsupported(_)) => 10,
+        SkError::Token(Token::Transport(_)) => 11,
+        SkError::Token(
+            Token::PinRequired
+            | Token::PinInvalid { .. }
+            | Token::PinBlocked(_)
+            | Token::PinNotSet
+            | Token::UserVerificationBlocked,
+        ) => 12,
+        SkError::Token(Token::TouchTimeout | Token::Cancelled) => 13,
+        SkError::Token(Token::CredentialNotFound) => 14,
+        SkError::Token(Token::Malformed(_)) | SkError::Malformed(_) => 15,
         SkError::NotASecurityKey(_)
-        | SkError::UnsupportedAlgorithm(_)
         | SkError::EncryptedHandle
+        | SkError::Unattended
         | SkError::TransportClosed(_)
         | SkError::Internal(_) => 16,
     };
@@ -189,7 +198,7 @@ fn sk_error_exit_code(error: &SkError) -> ExitCode {
 }
 
 /// `session_id || SSH_MSG_USERAUTH_REQUEST` for a publickey attempt with
-/// this key — the bytes `russh` hands to the signer.
+/// this key: the bytes `russh` hands to the signer.
 fn userauth_request(user: &str, session_id: &[u8; 32], public_key: &PublicKey) -> Vec<u8> {
     let mut blob = Vec::new();
     blob.extend_from_slice(session_id);
@@ -198,7 +207,7 @@ fn userauth_request(user: &str, session_id: &[u8; 32], public_key: &PublicKey) -
     put_string(&mut blob, b"ssh-connection");
     put_string(&mut blob, b"publickey");
     blob.push(1); // TRUE: a real signature, not an "is this key acceptable?" probe
-    put_string(&mut blob, b"sk-ssh-ed25519@openssh.com");
+    put_string(&mut blob, public_key.algorithm().as_str().as_bytes());
     put_string(
         &mut blob,
         &public_key.to_bytes().expect("the public key encodes"),

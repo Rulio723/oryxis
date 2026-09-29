@@ -2321,7 +2321,13 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         // Hardware security keys (native FIDO2)
         "auth_security_key" => "مفتاح أمان",
         "security_key_help" => "سيُعرض مفتاح العتاد هذا فقط، بلا وكيل أو مفتاح آخر أو رجوع إلى كلمة المرور. إذا غاب المفتاح أو رُفض اللمس فسيفشل الاتصال.",
-        "security_key_none_imported" => "لا يوجد مفتاح أمان في الخزنة بعد. استورد ملف id_ed25519_sk الذي أنشأه ssh-keygen.",
+        "security_key_none_imported" => "لا يوجد مفتاح أمان في الخزنة بعد. استورد ملف id_ed25519_sk / id_ecdsa_sk الذي أنشأه ssh-keygen.",
+        "sk_pin_title" => "رمز PIN لمفتاح الأمان",
+        "sk_pin_label" => "رمز PIN",
+        "sk_pin_retry" => "رمز PIN غير صحيح. تبقى {n} محاولات قبل قفل المفتاح.",
+        "sk_touch_notice" => "المس مفتاح الأمان للمتابعة",
+        "sk_verify_notice" => "تحقق على مفتاح الأمان (رمز PIN أو البصمة) للمتابعة",
+        "security_key_unsupported_platform" => "لا يمكن لهذه المنصة التوقيع بمفتاح أمان بعد (يمكن ذلك على Windows وLinux). استخدم طريقة Agent مع ssh-agent يحتفظ بالمفتاح.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "استيراد المفتاح العام",
         "key_badge_security_key" => "مفتاح أمان",

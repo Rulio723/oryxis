@@ -17,7 +17,5 @@ pub use sftp::{
     resume_offset, AttrUpdate, FsInfo, RemoteRangedFile, RemoteStat, SftpClient, SftpEntry,
     UploadOptions,
 };
-pub use sk::{
-    platform_authenticator, SkAuthenticator, SkCredential, SkError, SkSigner,
-};
+pub use sk::{SecurityKeyNotice, SecurityKeyPrompts, SkAlgorithm, SkCredential, SkError, SkSigner};
 pub use x11::{X11Forwarding, X11Target};

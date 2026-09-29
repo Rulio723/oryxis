@@ -13,10 +13,9 @@ use crate::app::Oryxis;
 /// own. `Agent` is absent: its key lives in the agent process, and a
 /// local PEM would be a second credential the user did not pick.
 ///
-/// `SecurityKey` is present: the hardware key IS this host's key, and
-/// the vault row holds the FIDO2 credential handle the engine signs
-/// with. Resolving it here is what makes "the key is the credential"
-/// true rather than a mode that merely refuses everything else.
+/// `SecurityKey` is present: the hardware key IS this host's key, and the
+/// vault row (or the disk file) holds the credential handle the engine
+/// signs with.
 pub(crate) fn conn_uses_key(conn: &Connection) -> bool {
     matches!(
         conn.auth_method,
@@ -24,15 +23,44 @@ pub(crate) fn conn_uses_key(conn: &Connection) -> bool {
     )
 }
 
-/// Whether the disk-key source may fill an empty key slot. A
-/// hardware-only host is excluded: `~/.ssh` is scanned for keys that
-/// work without hardware, so the disk could hand this mode a software
-/// key it must then reject — a failure the user would read as "my
-/// YubiKey is broken". An explicit `identity_file` still works through
-/// the same scan, and a token handle named there is signed with
-/// natively.
-pub(crate) fn conn_may_use_disk_key(conn: &Connection) -> bool {
-    conn_uses_key(conn) && conn.auth_method != AuthMethod::SecurityKey
+/// Which `~/.ssh` default names the disk-key scan may pick for a host.
+///
+/// A `SecurityKey` host scans only the `_sk` files: a software key there
+/// would be picked first ("first usable wins") and then refused by the
+/// method, a failure that reads as "my key is broken". Everywhere else the
+/// `_sk` files come after every software key, and only where this build
+/// can sign with a token at all. An explicit `identity_file` is never
+/// filtered: typing a path is the choice of key.
+pub(crate) fn disk_key_wanted(auth: &AuthMethod) -> oryxis_vault::DiskKeyWanted {
+    use oryxis_vault::DiskKeyWanted;
+    match auth {
+        AuthMethod::SecurityKey => DiskKeyWanted::SecurityKey,
+        _ if oryxis_ssh::sk::native_signing_supported() => DiskKeyWanted::SoftwareThenSecurityKey,
+        _ => DiskKeyWanted::Software,
+    }
+}
+
+/// The security-key half of an attended dial
+/// (`SshEngine::with_security_key_prompts`): the words the PIN is asked
+/// with, and where "touch your key" goes. Only the dial sites a person
+/// drives call this; every other dial keeps the engine's refusal.
+pub(crate) fn security_key_prompts(
+    notices: Option<tokio::sync::mpsc::UnboundedSender<oryxis_ssh::SecurityKeyNotice>>,
+) -> oryxis_ssh::SecurityKeyPrompts {
+    oryxis_ssh::SecurityKeyPrompts {
+        pin_title: crate::i18n::t("sk_pin_title").to_string(),
+        pin_label: crate::i18n::t("sk_pin_label").to_string(),
+        pin_retry: crate::i18n::t("sk_pin_retry").to_string(),
+        notices,
+    }
+}
+
+/// What the card (or the pane) says while the token waits on a person.
+pub(crate) fn security_key_notice_text(notice: oryxis_ssh::SecurityKeyNotice) -> &'static str {
+    match notice {
+        oryxis_ssh::SecurityKeyNotice::Touch => crate::i18n::t("sk_touch_notice"),
+        oryxis_ssh::SecurityKeyNotice::Verify => crate::i18n::t("sk_verify_notice"),
+    }
 }
 
 impl Oryxis {
@@ -90,10 +118,11 @@ impl Oryxis {
             // `<key>-cert.pub` sibling), never from the vault: the pair
             // must always describe ONE key, which is the whole reason
             // `KeyMaterial` bundles them.
-            None if conn_may_use_disk_key(conn) => {
+            None if conn_uses_key(conn) => {
                 match oryxis_vault::resolve_disk_key(
                     conn.use_disk_key,
                     conn.identity_file.as_deref(),
+                    disk_key_wanted(&conn.auth_method),
                 )
                 .material()
                 {
@@ -646,7 +675,7 @@ impl UnattendedDial {
 
 #[cfg(test)]
 mod tests {
-    use super::{conn_may_use_disk_key, conn_uses_key, quick_connect_offerable};
+    use super::{conn_uses_key, disk_key_wanted, quick_connect_offerable};
     use oryxis_core::models::connection::{AuthMethod, Connection};
     use oryxis_core::ssh_target::SshTarget;
 
@@ -681,7 +710,7 @@ mod tests {
 
     #[test]
     fn a_key_offering_method_is_what_resolves_a_vault_key() {
-        // The methods that name a key of their own — including the
+        // The methods that name a key of their own, including the
         // hardware-only one, whose vault row holds the token handle.
         for auth in [
             AuthMethod::Key,
@@ -706,13 +735,15 @@ mod tests {
     }
 
     #[test]
-    fn the_disk_source_never_fills_a_hardware_only_host() {
-        // `~/.ssh` is scanned for keys that work without hardware, so a
-        // `SecurityKey` host could only be handed a software key the
-        // engine must then reject — a failure the user would read as
-        // "my key is broken".
-        assert!(!conn_may_use_disk_key(&host(AuthMethod::SecurityKey)));
-        assert!(conn_may_use_disk_key(&host(AuthMethod::Key)));
-        assert!(conn_may_use_disk_key(&host(AuthMethod::Auto)));
+    fn a_hardware_only_host_scans_only_security_key_files() {
+        use oryxis_vault::DiskKeyWanted;
+        assert_eq!(disk_key_wanted(&AuthMethod::SecurityKey), DiskKeyWanted::SecurityKey);
+        let expected = if oryxis_ssh::sk::native_signing_supported() {
+            DiskKeyWanted::SoftwareThenSecurityKey
+        } else {
+            DiskKeyWanted::Software
+        };
+        assert_eq!(disk_key_wanted(&AuthMethod::Key), expected);
+        assert_eq!(disk_key_wanted(&AuthMethod::Auto), expected);
     }
 }

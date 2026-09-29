@@ -1082,6 +1082,17 @@ pub(crate) fn host_matches_search(
 // These translate the typed "default host profile" settings to / from
 // their settings-table string form and the localized picker labels.
 
+/// Whether an auth-method picker offers `SecurityKey`: where this build
+/// can sign with a token, or when `current` already IS it (a host synced
+/// from a machine that can), so the picker never silently rewrites a value
+/// it cannot show.
+pub(crate) fn security_key_method_offered(
+    current: &oryxis_core::models::connection::AuthMethod,
+) -> bool {
+    oryxis_ssh::sk::native_signing_supported()
+        || *current == oryxis_core::models::connection::AuthMethod::SecurityKey
+}
+
 /// Localized picker label for an auth method (mirrors the host editor's
 /// auth picker).
 pub(crate) fn auth_method_label(m: &oryxis_core::models::connection::AuthMethod) -> String {
@@ -1510,7 +1521,7 @@ mod tests {
     fn auth_method_picker_labels_round_trip() {
         // The editor stores the *localized* label and maps it back, so
         // both halves of the pair have to agree for every method the
-        // picker offers — a missing arm silently degrades a saved host to
+        // picker offers: a missing arm silently degrades a saved host to
         // `Auto`, which is the failure this catches.
         use oryxis_core::models::connection::AuthMethod;
         for m in [

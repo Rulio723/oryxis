@@ -1,10 +1,10 @@
 //! Windows Hello, as the transport for security-key signing.
 //!
-//! [`super::hid_windows`] drives the token over USB HID directly. On
-//! Windows that is a dead end for a program the user merely double-clicks:
-//! since Windows 10 1903 a non-elevated process cannot open a FIDO
-//! device's HID interface at all — `CreateFileW` answers
-//! `ERROR_ACCESS_DENIED` before a single CTAP byte is exchanged. Every
+//! `hid_windows` drives the token over USB HID directly. On Windows that
+//! is a dead end for a program the user merely double-clicks: since
+//! Windows 10 1903 a non-elevated process cannot open a FIDO device's HID
+//! interface at all (`CreateFileW` answers `ERROR_ACCESS_DENIED` before a
+//! single CTAP byte is exchanged). Every
 //! tool that talks to a security key on Windows therefore either asks to
 //! be run as administrator or goes through the WebAuthn API. This module
 //! is the second: it is what browsers use, it is what Microsoft's own
@@ -12,8 +12,8 @@
 //!
 //! It is a good fit beyond the permission problem. We hand the API the
 //! userauth blob, it hands back `authenticatorData` and a signature, and
-//! the two things the SSH blob needs — the flags byte and the signature
-//! counter — sit at fixed offsets inside that data, the same two offsets
+//! the two things the SSH blob needs (the flags byte and the signature
+//! counter) sit at fixed offsets inside that data, the same two offsets
 //! OpenSSH's `sk-usbhid.c` reads.
 //!
 //! ## The client data has to be the message, not its hash
@@ -26,27 +26,31 @@
 //! that no server would ever accept, and one that fails for reasons
 //! invisible from this side of the wire.
 //!
-//! ## What this costs
+//! ## What this costs, and what it gives
 //!
-//! The API always involves a human — it raises the Windows security dialog
-//! and waits for a touch — so `require_user_presence: false` cannot be
-//! honoured. For `sk-ssh-ed25519@openssh.com` that is not a loss: the key
-//! file says whether a touch is required, and a credential made without it
-//! still works, just with a prompt.
+//! The API always involves a human (it raises the Windows Security dialog
+//! and waits for a touch), so a `no-touch-required` credential still gets
+//! a prompt. In exchange it owns user verification: a `verify-required`
+//! key has its PIN (or Windows Hello biometric) collected by that same
+//! dialog, so the app's own PIN prompt never runs on this path.
+//!
+//! The call is cancelled by id (`WebAuthNGetCancellationId` before it,
+//! `WebAuthNCancelCurrentOperation` from another thread), which is what
+//! takes the dialog down when the dial that raised it is abandoned.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{FARPROC, HWND};
+use windows_sys::core::GUID;
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-use super::SkError;
-use super::authenticator::{Assertion, AssertionRequest, SkAuthenticator};
+use crate::authenticator::{Assertion, AssertionRequest, Authenticator, Interaction, TokenEvent};
+use crate::Error;
 
-/// How long a touch may take. Matches the HID transport's budget: OpenSSH
-/// waits forever, an SSH client with a connection to keep alive should not.
+/// How long a touch may take. Matches the HID transport's budget.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 // Struct versions and enum values, from the Windows SDK's `webauthn.h`.
@@ -110,7 +114,7 @@ struct WebAuthnAssertionOptions {
     flags: u32,
     u2f_app_id: *const u16,
     pb_u2f_app_id: *mut i32,
-    cancellation_id: *mut c_void,
+    cancellation_id: *mut GUID,
     allow_credential_list: *mut c_void,
     cred_large_blob_operation: u32,
     cb_cred_large_blob: u32,
@@ -145,11 +149,18 @@ type FreeAssertionFn = unsafe extern "system" fn(assertion: *mut WebAuthnAsserti
 
 type ErrorNameFn = unsafe extern "system" fn(hr: i32) -> *const u16;
 
-/// The three `webauthn.dll` entry points we need, resolved once.
+type GetCancellationIdFn = unsafe extern "system" fn(id: *mut GUID) -> i32;
+
+type CancelOperationFn = unsafe extern "system" fn(id: *const GUID) -> i32;
+
+/// The `webauthn.dll` entry points we need, resolved once.
 struct WebAuthnApi {
     get_assertion: GetAssertionFn,
     free_assertion: FreeAssertionFn,
     error_name: ErrorNameFn,
+    /// Optional: a `webauthn.dll` without them still signs, it just cannot
+    /// be interrupted, and the dialog stays until its own timeout.
+    cancellation: Option<(GetCancellationIdFn, CancelOperationFn)>,
 }
 
 // The function pointers come from a system DLL that is never unloaded, so
@@ -182,10 +193,18 @@ fn api() -> Option<&'static WebAuthnApi> {
             std::mem::transmute(resolve(module, c"WebAuthNFreeAssertion")?);
         let error_name: ErrorNameFn =
             std::mem::transmute(resolve(module, c"WebAuthNGetErrorName")?);
+        let cancellation = (|| {
+            let get_id: GetCancellationIdFn =
+                std::mem::transmute(resolve(module, c"WebAuthNGetCancellationId")?);
+            let cancel: CancelOperationFn =
+                std::mem::transmute(resolve(module, c"WebAuthNCancelCurrentOperation")?);
+            Some((get_id, cancel))
+        })();
         Some(WebAuthnApi {
             get_assertion,
             free_assertion,
             error_name,
+            cancellation,
         })
     })
     .as_ref()
@@ -220,26 +239,26 @@ impl Default for WindowsWebAuthnAuthenticator {
     }
 }
 
-impl SkAuthenticator for WindowsWebAuthnAuthenticator {
-    fn get_assertion(&self, request: &AssertionRequest) -> Result<Assertion, SkError> {
-        if request.pin.is_some() {
-            // The API can collect a PIN, but it would collect it for its own
-            // PIN protocol and hand back a `pinUvAuthParam` we never see.
-            // Refusing is honest; silently ignoring the user's PIN would
-            // produce a confusing failure on the server instead.
-            return Err(SkError::PinRequired);
-        }
+impl Authenticator for WindowsWebAuthnAuthenticator {
+    fn get_assertion(
+        &self,
+        request: &AssertionRequest,
+        interaction: &Interaction,
+    ) -> Result<Assertion, Error> {
         let api = api().ok_or_else(|| {
-            SkError::DeviceNotFound(
+            Error::DeviceNotFound(
                 "Windows Hello is not available on this system; \
                  Windows 10 1903 or newer is required"
                     .into(),
             )
         })?;
+        if interaction.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
 
         let rp_id = wide(&request.application);
 
-        // The bytes, not their hash — the API hashes what it is handed.
+        // The bytes, not their hash: the API hashes what it is handed.
         let client_data = WebAuthnClientData {
             version: CLIENT_DATA_VERSION,
             cb_client_data_json: request.message.len() as u32,
@@ -247,27 +266,44 @@ impl SkAuthenticator for WindowsWebAuthnAuthenticator {
             hash_alg_id: HASH_ALGORITHM.as_ptr(),
         };
 
-        // A resident credential has no handle, and an empty list is how the
-        // API is told to search the token's own store.
+        // No handle means "let the token pick a discoverable credential",
+        // which the API is told with an empty list.
+        let handle = request
+            .allow_credential
+            .as_deref()
+            .filter(|handle| !handle.is_empty());
         let mut credential = WebAuthnCredential {
             version: CREDENTIAL_VERSION,
-            cb_id: request.key_handle.as_ref().map_or(0, Vec::len) as u32,
-            pb_id: request
-                .key_handle
-                .as_ref()
-                .map_or(std::ptr::null_mut(), |handle| {
-                    handle.as_ptr() as *mut u8
-                }),
+            cb_id: handle.map_or(0, <[u8]>::len) as u32,
+            pb_id: handle.map_or(std::ptr::null_mut(), |handle| handle.as_ptr() as *mut u8),
             credential_type: PUBLIC_KEY_TYPE.as_ptr(),
         };
         let credential_list = WebAuthnCredentials {
-            count: u32::from(request.key_handle.is_some()),
-            credentials: if request.key_handle.is_some() {
+            count: u32::from(handle.is_some()),
+            credentials: if handle.is_some() {
                 &mut credential
             } else {
                 std::ptr::null_mut()
             },
         };
+
+        // An id for this one call, and the hook that cancels it from
+        // whichever thread gives up on it. The guard unregisters the hook
+        // when the call returns, so a late cancel never reaches into an
+        // operation that is over.
+        let mut cancellation_id: GUID = unsafe { std::mem::zeroed() };
+        let cancellable = api
+            .cancellation
+            .is_some_and(|(get_id, _)| unsafe { get_id(&mut cancellation_id) } >= 0);
+        let _cancel_guard = api.cancellation.filter(|_| cancellable).map(|(_, cancel)| {
+            let id = cancellation_id;
+            interaction.cancel.on_cancel(Box::new(move || unsafe {
+                cancel(&id);
+            }))
+        });
+        if interaction.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
 
         let options = WebAuthnAssertionOptions {
             version: ASSERTION_OPTIONS_VERSION,
@@ -278,7 +314,7 @@ impl SkAuthenticator for WindowsWebAuthnAuthenticator {
                 extensions: std::ptr::null_mut(),
             },
             authenticator_attachment: AUTHENTICATOR_ATTACHMENT_ANY,
-            user_verification_requirement: if request.require_user_verification {
+            user_verification_requirement: if request.user_verification {
                 USER_VERIFICATION_REQUIREMENT_REQUIRED
             } else {
                 USER_VERIFICATION_REQUIREMENT_DISCOURAGED
@@ -286,12 +322,24 @@ impl SkAuthenticator for WindowsWebAuthnAuthenticator {
             flags: 0,
             u2f_app_id: std::ptr::null(),
             pb_u2f_app_id: std::ptr::null_mut(),
-            cancellation_id: std::ptr::null_mut(),
+            cancellation_id: if cancellable {
+                &mut cancellation_id
+            } else {
+                std::ptr::null_mut()
+            },
             allow_credential_list: std::ptr::null_mut(),
             cred_large_blob_operation: 0,
             cb_cred_large_blob: 0,
             pb_cred_large_blob: std::ptr::null_mut(),
         };
+
+        // The dialog IS the touch prompt; say so to whoever is showing the
+        // connect card, before the call blocks on it.
+        interaction.event(if request.user_verification {
+            TokenEvent::VerificationNeeded
+        } else {
+            TokenEvent::TouchNeeded
+        });
 
         let mut raw: *mut WebAuthnAssertion = std::ptr::null_mut();
         let hr = unsafe {
@@ -307,12 +355,15 @@ impl SkAuthenticator for WindowsWebAuthnAuthenticator {
             )
         };
         if hr < 0 {
+            if interaction.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
             return Err(map_hr(api, hr));
         }
         if raw.is_null() {
             // Success with nothing to show for it. Cannot be mapped through
             // the error name, because there is no error.
-            return Err(SkError::Malformed(
+            return Err(Error::Malformed(
                 "Windows Hello reported success but returned no assertion".into(),
             ));
         }
@@ -326,9 +377,9 @@ impl SkAuthenticator for WindowsWebAuthnAuthenticator {
 
 /// Pull the flags and counter out of `authenticatorData` and hand back the
 /// signature. Split out so the `free` happens on every path.
-fn read_assertion(raw: *const WebAuthnAssertion) -> Result<Assertion, SkError> {
+fn read_assertion(raw: *const WebAuthnAssertion) -> Result<Assertion, Error> {
     if raw.is_null() {
-        return Err(SkError::Malformed("the token returned no assertion".into()));
+        return Err(Error::Malformed("the token returned no assertion".into()));
     }
     let assertion = unsafe { &*raw };
     let auth_data = copy_bytes(assertion.pb_authenticator_data, assertion.cb_authenticator_data);
@@ -337,7 +388,7 @@ fn read_assertion(raw: *const WebAuthnAssertion) -> Result<Assertion, SkError> {
     // rpIdHash(32) || flags(1) || signCount(4). Anything shorter cannot be
     // an assertion, and indexing it would panic.
     if auth_data.len() < 37 {
-        return Err(SkError::Malformed(format!(
+        return Err(Error::Malformed(format!(
             "the token's authenticator data is {} bytes, too short to carry flags and a counter",
             auth_data.len()
         )));
@@ -363,9 +414,9 @@ fn copy_bytes(pointer: *const u8, length: u32) -> Vec<u8> {
 }
 
 /// Turn an `HRESULT` into something a person can act on. The API's own
-/// names are the only stable thing here — the raw numbers are shared with
-/// NTE and Win32 ranges — so they are what the message is built from.
-fn map_hr(api: &WebAuthnApi, hr: i32) -> SkError {
+/// names are the only stable thing here (the raw numbers are shared with
+/// the NTE and Win32 ranges), so they are what the message is built from.
+fn map_hr(api: &WebAuthnApi, hr: i32) -> Error {
     let name = unsafe {
         let pointer = (api.error_name)(hr);
         if pointer.is_null() {
@@ -382,10 +433,10 @@ fn map_hr(api: &WebAuthnApi, hr: i32) -> SkError {
         // The user closed the dialog, or a touch never came. Both are the
         // user's own doing and worth saying plainly rather than dressing
         // up as a device fault.
-        "NotAllowedError" => SkError::Cancelled,
-        "AbortError" => SkError::Cancelled,
-        "TimeoutError" => SkError::TouchTimeout,
-        _ => SkError::Transport(format!(
+        "NotAllowedError" => Error::Cancelled,
+        "AbortError" => Error::Cancelled,
+        "TimeoutError" => Error::TouchTimeout,
+        _ => Error::Transport(format!(
             "Windows Hello refused the request ({name}, hresult 0x{:08x})",
             hr as u32
         )),

@@ -981,6 +981,7 @@ impl Oryxis {
             disk_key_status: oryxis_vault::resolve_disk_key(
                 conn.use_disk_key,
                 conn.identity_file.as_deref(),
+                crate::connect_methods::disk_key_wanted(&conn.auth_method),
             )
             .status(),
             terminal_theme: conn.terminal_theme.clone(),
@@ -1252,7 +1253,7 @@ enum KeyComboFilter {
 /// unit-tests: the `(none)` sentinel first, then the key labels per
 /// the filter. `Key`, `Certificate` and `SecurityKey` all sign with the
 /// selected key, so they only list rows that HOLD usable material
-/// (`has_private`) — which for a security key means the row carries the
+/// (`has_private`), which for a security key means the row carries the
 /// FIDO2 credential handle, not just the public half. A public-only
 /// security-key row (a B3 import) belongs under `Agent`, where an
 /// external agent owns the token.

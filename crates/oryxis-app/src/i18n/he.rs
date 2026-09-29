@@ -2340,7 +2340,13 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         // Hardware security keys (native FIDO2)
         "auth_security_key" => "מפתח אבטחה",
         "security_key_help" => "רק מפתח החומרה הזה יוצע: ללא סוכן, מפתח אחר או סיסמת גיבוי. אם המפתח חסר או שהמגע נדחה, החיבור ייכשל.",
-        "security_key_none_imported" => "עדיין אין מפתח אבטחה בכספת. יש לייבא את הקובץ id_ed25519_sk שיצר ssh-keygen.",
+        "security_key_none_imported" => "עדיין אין מפתח אבטחה בכספת. יש לייבא את הקובץ id_ed25519_sk / id_ecdsa_sk שיצר ssh-keygen.",
+        "sk_pin_title" => "PIN של מפתח האבטחה",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "PIN שגוי. נותרו {n} ניסיונות לפני שהמפתח יינעל.",
+        "sk_touch_notice" => "יש לגעת במפתח האבטחה כדי להמשיך",
+        "sk_verify_notice" => "יש לאמת במפתח האבטחה (PIN או טביעת אצבע) כדי להמשיך",
+        "security_key_unsupported_platform" => "פלטפורמה זו עדיין לא יכולה לחתום עם מפתח אבטחה (Windows ו-Linux יכולות). יש להשתמש בשיטת סוכן (Agent) עם ssh-agent שמחזיק את המפתח.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "ייבוא מפתח ציבורי",
         "key_badge_security_key" => "מפתח אבטחה",

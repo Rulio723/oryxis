@@ -2337,12 +2337,18 @@ pub(super) fn lookup(key: &str) -> &'static str {
         "public_key_invalid_error" => "That is not a valid OpenSSH public key line.",
         "public_key_mismatch_error" => "The public key does not match the private key.",
         "cert_no_keys_hint" => "No key in the vault has a certificate attached yet.",
+        "cert_key_no_cert_hint" => "The selected key has no attached certificate.",
 
         // Hardware security keys (native FIDO2)
         "auth_security_key" => "Security Key",
         "security_key_help" => "Only this hardware key is offered: no agent, no other key, no password fallback. If the key is missing or the touch is declined, the connection fails.",
-        "security_key_none_imported" => "No security key in the vault yet. Import the id_ed25519_sk file ssh-keygen produced.",
-        "cert_key_no_cert_hint" => "The selected key has no attached certificate.",
+        "security_key_none_imported" => "No security key in the vault yet. Import the id_ed25519_sk / id_ecdsa_sk file ssh-keygen produced.",
+        "sk_pin_title" => "Security key PIN",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "Wrong PIN. {n} attempts left before the key locks.",
+        "sk_touch_notice" => "Touch your security key to continue",
+        "sk_verify_notice" => "Verify on your security key (PIN or fingerprint) to continue",
+        "security_key_unsupported_platform" => "This platform cannot sign with a security key yet (Windows and Linux can). Use the Agent method with an ssh-agent that holds the key.",
 
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Import public key",

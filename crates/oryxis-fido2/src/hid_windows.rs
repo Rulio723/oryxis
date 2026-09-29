@@ -1,49 +1,13 @@
-//! The Windows half of the token transport: CTAP2 over USB HID.
-//!
-//! No C dependency. `libfido2` would be the obvious building block, but
-//! it is a C library that would need a toolchain and a shipping story on
-//! every platform Oryxis builds for; the FIDO HID interface is a plain
-//! interrupt endpoint pair, and Windows already exposes it through
-//! SetupAPI + `hid.dll`, both of which `windows-sys` binds directly.
-//!
-//! Overlapped I/O rather than a blocking `ReadFile` on a helper thread:
-//! the token sends `CTAPHID_KEEPALIVE` while it waits for a touch, and we
-//! need to be able to give up on our own clock (and `CancelIoEx` the
-//! request) instead of leaving a read outstanding on a device that may
+//! CTAP2 over USB HID on Windows: SetupAPI walks the HID class, `hid.dll`
+//! says which interface is the FIDO one, and the channel is an overlapped
+//! read/write pair so a read can give up on our clock (and `CancelIoEx`
+//! the request) instead of staying outstanding on a device that may
 //! already be unplugged.
 //!
-//! ## Not the Windows transport any more
-//!
-//! [`super::webauthn_windows`] is what Windows uses. Since Windows 10 1903
-//! a non-elevated process cannot open a FIDO device's HID interface at
-//! all, so this path only ever runs from an elevated shell — which is why
-//! it is now the fallback rather than the front door.
-//!
-//! ## Multi-packet interoperability
-//!
-//! Measured against one physical token, before the WebAuthn transport
-//! existed:
-//!
-//! - Single-packet `getAssertion` requests are accepted. Shortening the
-//!   request until it fits in one 57-byte initial packet — dropping the
-//!   allow-list, or the options map, or both — gets `0x2e`
-//!   (`NO_CREDENTIALS`) rather than a complaint, which is the token saying
-//!   it read and understood the request and simply found nothing matching.
-//! - Requests containing an allow-list originally came back `0x11`
-//!   (`CBOR_UNEXPECTED_TYPE`). Those requests also happened to require a
-//!   continuation packet because an OpenSSH credential handle is large.
-//! - `CTAPHID_PING` sent through the very same `send` is echoed back
-//!   byte-for-byte at 70, 100 and 195 bytes — so the framing, the sequence
-//!   numbers and the packet count are all right.
-//! - Pacing the continuation packets changed nothing.
-//!
-//! The shared feature was the allow-list, not fragmentation: its nested
-//! `PublicKeyCredentialDescriptor` had incorrectly used integer keys instead
-//! of the WebAuthn text keys `"type"` and `"id"`. Correcting those keys fixes
-//! the direct-HID request without any transport delay. This path is used by
-//! elevated processes, while ordinary Windows launches use the WebAuthn API.
+//! Only an ELEVATED process gets here by default: since Windows 10 1903 a
+//! non-elevated process cannot open a FIDO HID interface at all, so
+//! ordinary launches go through Windows Hello (`webauthn_windows`).
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
@@ -66,9 +30,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
-use super::SkError;
-use super::authenticator::{Assertion, AssertionRequest, SkAuthenticator};
-use super::ctap::{self, HID_PACKET_LEN, HidTransport, TouchState};
+use crate::authenticator::{Assertion, AssertionRequest, Authenticator, Interaction};
+use crate::ctap::{self, HID_PACKET_LEN, HidTransport};
+use crate::Error;
 
 /// The FIDO usage page and usage. This pair is what distinguishes the
 /// security-key interface from the keyboard interface the same device
@@ -90,69 +54,31 @@ const INVALID_HDEVINFO: HDEVINFO = -1;
 const ERROR_OPERATION_ABORTED: u32 = 995;
 
 /// How long a touch may take before the attempt is abandoned. OpenSSH
-/// waits forever; an SSH client with a connection to keep alive should
-/// not, and the user can simply try again.
+/// waits forever; an SSH client with a server's login grace time running
+/// should not, and the user can simply try again.
 const DEFAULT_TOUCH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Signs with whatever FIDO2 token is plugged in.
-pub(crate) struct WindowsHidAuthenticator {
-    touch_timeout: Duration,
-    /// Told when the token starts waiting for a touch, so a caller can
-    /// put "touch your key" on screen without the SSH task blocking.
-    progress: Option<Arc<dyn Fn(TouchState) + Send + Sync>>,
-}
+#[derive(Default)]
+pub(crate) struct WindowsHidAuthenticator;
 
-impl Default for WindowsHidAuthenticator {
-    fn default() -> Self {
-        Self {
-            touch_timeout: DEFAULT_TOUCH_TIMEOUT,
-            progress: None,
-        }
-    }
-}
-
-impl WindowsHidAuthenticator {
-    #[allow(dead_code)] // Wired up when the UI grows a touch hint.
-    pub(crate) fn with_progress(mut self, progress: Arc<dyn Fn(TouchState) + Send + Sync>) -> Self {
-        self.progress = Some(progress);
-        self
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_touch_timeout(mut self, timeout: Duration) -> Self {
-        self.touch_timeout = timeout;
-        self
-    }
-}
-
-impl SkAuthenticator for WindowsHidAuthenticator {
-    fn get_assertion(&self, request: &AssertionRequest) -> Result<Assertion, SkError> {
-        let progress = self.progress.clone();
-        let mut report = move |state| {
-            if let Some(progress) = &progress {
-                progress(state);
-            } else {
-                tracing::info!(
-                    "security key is waiting for {}",
-                    match state {
-                        TouchState::WaitingForTouch => "a touch",
-                        TouchState::WaitingForVerification => "user verification",
-                    }
-                );
-            }
-        };
-
+impl Authenticator for WindowsHidAuthenticator {
+    fn get_assertion(
+        &self,
+        request: &AssertionRequest,
+        interaction: &Interaction,
+    ) -> Result<Assertion, Error> {
         let mut device = open_first()?;
-        ctap::get_assertion(&mut device, request, self.touch_timeout, &mut report)
+        ctap::get_assertion(&mut device, request, interaction, DEFAULT_TOUCH_TIMEOUT)
     }
 }
 
 /// Open the first FIDO interface that will have us. More than one token
 /// can be plugged in, and one of them can be busy with another
-/// application, so one refusal is not the end of the search — but the
+/// application, so one refusal is not the end of the search, but the
 /// reason the last one gave is, because "no key found" is the wrong thing
 /// to say when the key was found and would not open.
-fn open_first() -> Result<HidDevice, SkError> {
+fn open_first() -> Result<HidDevice, Error> {
     let mut last_error = None;
     for path in fido_interfaces()? {
         match HidDevice::open(&path) {
@@ -161,12 +87,12 @@ fn open_first() -> Result<HidDevice, SkError> {
         }
     }
     Err(last_error
-        .unwrap_or_else(|| SkError::DeviceNotFound("no FIDO security key is plugged in".into())))
+        .unwrap_or_else(|| Error::DeviceNotFound("no FIDO security key is plugged in".into())))
 }
 
 /// Every HID interface on the machine that is a FIDO token, as
 /// NUL-terminated UTF-16 device paths.
-fn fido_interfaces() -> Result<Vec<Vec<u16>>, SkError> {
+fn fido_interfaces() -> Result<Vec<Vec<u16>>, Error> {
     let interfaces = hid_interface_paths()?;
     tracing::debug!(count = interfaces.len(), "HID interfaces present");
     let fido: Vec<Vec<u16>> = interfaces
@@ -174,7 +100,7 @@ fn fido_interfaces() -> Result<Vec<Vec<u16>>, SkError> {
         .filter(|path| is_fido_interface(path))
         .collect();
     if fido.is_empty() {
-        return Err(SkError::DeviceNotFound(
+        return Err(Error::DeviceNotFound(
             "no FIDO security key is plugged in".into(),
         ));
     }
@@ -183,7 +109,7 @@ fn fido_interfaces() -> Result<Vec<Vec<u16>>, SkError> {
 }
 
 /// Every HID interface currently present, as NUL-terminated UTF-16 paths.
-fn hid_interface_paths() -> Result<Vec<Vec<u16>>, SkError> {
+fn hid_interface_paths() -> Result<Vec<Vec<u16>>, Error> {
     let mut paths = Vec::new();
     unsafe {
         let mut guid = std::mem::zeroed();
@@ -196,7 +122,7 @@ fn hid_interface_paths() -> Result<Vec<Vec<u16>>, SkError> {
             DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
         );
         if set == INVALID_HDEVINFO {
-            return Err(SkError::Transport(format!(
+            return Err(Error::Transport(format!(
                 "SetupDiGetClassDevs failed (win32 {})",
                 GetLastError()
             )));
@@ -352,7 +278,7 @@ struct HidDevice {
 }
 
 impl HidDevice {
-    fn open(path: &[u16]) -> Result<Self, SkError> {
+    fn open(path: &[u16]) -> Result<Self, Error> {
         unsafe {
             let handle = CreateFileW(
                 path.as_ptr(),
@@ -364,7 +290,7 @@ impl HidDevice {
                 std::ptr::null_mut(),
             );
             if handle == INVALID_HANDLE_VALUE {
-                return Err(SkError::DeviceNotFound(format!(
+                return Err(Error::DeviceNotFound(format!(
                     "could not open the security key (win32 {})",
                     GetLastError()
                 )));
@@ -373,7 +299,7 @@ impl HidDevice {
 
             let mut preparsed: PHIDP_PREPARSED_DATA = 0;
             if !HidD_GetPreparsedData(handle.0, &mut preparsed) {
-                return Err(SkError::Transport(
+                return Err(Error::Transport(
                     "the security key exposed no HID capabilities".into(),
                 ));
             }
@@ -381,13 +307,13 @@ impl HidDevice {
             let status = HidP_GetCaps(preparsed, &mut caps);
             HidD_FreePreparsedData(preparsed);
             if status != HIDP_STATUS_SUCCESS {
-                return Err(SkError::Transport(format!(
+                return Err(Error::Transport(format!(
                     "HidP_GetCaps failed (status 0x{status:08x})"
                 )));
             }
             let input_len = caps.InputReportByteLength as usize;
             if input_len < HID_PACKET_LEN {
-                return Err(SkError::Transport(format!(
+                return Err(Error::Transport(format!(
                     "the security key's HID reports are {input_len} bytes, \
                      too small for CTAPHID"
                 )));
@@ -402,7 +328,7 @@ impl HidDevice {
 
             let event = CreateEventW(std::ptr::null(), 1, 0, std::ptr::null());
             if event.is_null() {
-                return Err(SkError::Transport(format!(
+                return Err(Error::Transport(format!(
                     "could not create an I/O event (win32 {})",
                     GetLastError()
                 )));
@@ -437,14 +363,14 @@ impl HidDevice {
         started: bool,
         timeout: Duration,
         transferred: &mut u32,
-    ) -> Result<bool, SkError> {
+    ) -> Result<bool, Error> {
         if started {
             // Completed synchronously.
             return Ok(true);
         }
         let error = unsafe { GetLastError() };
         if error != ERROR_IO_PENDING {
-            return Err(SkError::Transport(format!(
+            return Err(Error::Transport(format!(
                 "the security key rejected an I/O request (win32 {error})"
             )));
         }
@@ -460,7 +386,7 @@ impl HidDevice {
                 return Ok(false);
             }
             other => {
-                return Err(SkError::Transport(format!(
+                return Err(Error::Transport(format!(
                     "waiting on the security key failed (wait status 0x{other:08x})"
                 )));
             }
@@ -470,7 +396,7 @@ impl HidDevice {
             if error == ERROR_OPERATION_ABORTED {
                 return Ok(false);
             }
-            return Err(SkError::Transport(format!(
+            return Err(Error::Transport(format!(
                 "the security key's I/O did not complete (win32 {error})"
             )));
         }
@@ -488,7 +414,7 @@ impl Drop for HidDevice {
 }
 
 impl HidTransport for HidDevice {
-    fn write_packet(&mut self, packet: &[u8; HID_PACKET_LEN]) -> Result<(), SkError> {
+    fn write_packet(&mut self, packet: &[u8; HID_PACKET_LEN]) -> Result<(), Error> {
         // A device that numbers its reports wants the report id first.
         let mut out = Vec::with_capacity(HID_PACKET_LEN + 1);
         if self.report_id_prefix {
@@ -516,13 +442,13 @@ impl HidTransport for HidDevice {
         // gone away fails here rather than hanging.
         match unsafe { self.complete(started, Duration::from_secs(2), &mut written)? } {
             true => Ok(()),
-            false => Err(SkError::Transport(
+            false => Err(Error::Transport(
                 "the security key did not accept a write; it may have been removed".into(),
             )),
         }
     }
 
-    fn read_packet(&mut self, timeout: Duration) -> Result<Option<[u8; HID_PACKET_LEN]>, SkError> {
+    fn read_packet(&mut self, timeout: Duration) -> Result<Option<[u8; HID_PACKET_LEN]>, Error> {
         let mut read = 0u32;
         let started = unsafe {
             ReadFile(
@@ -552,7 +478,7 @@ impl HidTransport for HidDevice {
             &self.buffer[..]
         };
         if source.len() < HID_PACKET_LEN {
-            return Err(SkError::Transport(format!(
+            return Err(Error::Transport(format!(
                 "the security key returned a short report ({read} bytes)"
             )));
         }

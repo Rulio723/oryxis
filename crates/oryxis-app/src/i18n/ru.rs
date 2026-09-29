@@ -2302,7 +2302,13 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         // Hardware security keys (native FIDO2)
         "auth_security_key" => "Ключ безопасности",
         "security_key_help" => "Будет предложен только этот аппаратный ключ: без агента, другого ключа и резервного пароля. Если ключ отсутствует или касание отклонено, подключение завершится ошибкой.",
-        "security_key_none_imported" => "В хранилище пока нет ключа безопасности. Импортируйте файл id_ed25519_sk, созданный ssh-keygen.",
+        "security_key_none_imported" => "В хранилище пока нет ключа безопасности. Импортируйте файл id_ed25519_sk / id_ecdsa_sk, созданный ssh-keygen.",
+        "sk_pin_title" => "PIN ключа безопасности",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "Неверный PIN. Осталось попыток до блокировки ключа: {n}.",
+        "sk_touch_notice" => "Коснитесь ключа безопасности, чтобы продолжить",
+        "sk_verify_notice" => "Подтвердите на ключе безопасности (PIN или отпечаток), чтобы продолжить",
+        "security_key_unsupported_platform" => "Эта платформа пока не умеет подписывать ключом безопасности (Windows и Linux умеют). Используйте метод «Агент» с ssh-agent, в котором есть этот ключ.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Импорт открытого ключа",
         "key_badge_security_key" => "Ключ безопасности",

@@ -230,6 +230,14 @@ impl Oryxis {
                     state.process(format!("\x1b[2m{}\x1b[0m\r\n", text).as_bytes());
                 }
             }
+            SshMessage::SshPaneSecurityKey(pane_id, notice) => {
+                let text = crate::connect_methods::security_key_notice_text(notice);
+                if let Some(pane) = self.pane_by_id_mut(pane_id)
+                    && let Ok(mut state) = pane.terminal.lock()
+                {
+                    state.process(format!("\x1b[2m[{text}]\x1b[0m\r\n").as_bytes());
+                }
+            }
             SshMessage::SshPaneBanner(pane_id, text) => {
                 // Split-pane connect: no progress card, straight to the
                 // pane's terminal.

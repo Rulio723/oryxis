@@ -228,6 +228,11 @@ pub struct SshEngine {
     /// Whether someone is watching this dial AND can stop it. See
     /// `with_attended`.
     attended: bool,
+    /// Permission to ask a person to touch a security key, plus the
+    /// words and the sink that asking needs. `None` REFUSES: a dial nobody
+    /// is watching must never raise a touch prompt (or the OS dialog) out
+    /// of nowhere. See `with_security_key_prompts`.
+    security_key_prompts: Option<crate::sk::SecurityKeyPrompts>,
     /// The host's preferred agent identity (B3): the public key of the
     /// vault key this connection references. Agent auth offers a matching
     /// agent identity FIRST (then the rest, preserving the try-all
@@ -778,6 +783,32 @@ mod tests {
         // Fail-closed by construction: a command proxy needs an
         // approval channel, and a fresh engine has none.
         assert!(engine.proxy_cmd_ask_tx.is_none());
+        // Same for a security-key touch.
+        assert!(engine.security_key_prompts.is_none());
+    }
+
+    /// A dial nobody is watching refuses to ask for a touch, and names
+    /// why; only a dial that passed its prompts may reach the token.
+    #[test]
+    fn a_security_key_needs_an_attended_dial() {
+        let err = SshEngine::new().security_key_interaction().unwrap_err();
+        assert!(
+            matches!(&err, SshError::Key(message) if message.contains("unattended")),
+            "got {err:?}"
+        );
+
+        let (kbi_tx, _kbi_rx) = tokio::sync::mpsc::channel(1);
+        let attended = SshEngine::new()
+            .with_kbi_ask(kbi_tx)
+            .with_security_key_prompts(crate::sk::SecurityKeyPrompts {
+                pin_title: "PIN".into(),
+                pin_label: "PIN".into(),
+                pin_retry: "{n}".into(),
+                notices: None,
+            });
+        let interaction = attended.security_key_interaction().unwrap();
+        assert!(interaction.pin.is_some(), "the PIN rides the kbi bridge");
+        assert!(interaction.events.is_none());
     }
 
     /// The spawn gate, from both sides.
