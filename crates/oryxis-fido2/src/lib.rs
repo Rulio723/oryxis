@@ -86,6 +86,10 @@ pub enum Error {
     /// The token does not hold the credential the request named.
     #[error("the security key does not hold this credential")]
     CredentialNotFound,
+    /// The token cannot do what this credential asks of it (a U2F-only
+    /// token has no user verification).
+    #[error("the security key cannot do this: {0}")]
+    UnsupportedByToken(&'static str),
     /// Something we sent or received does not parse.
     #[error("malformed security-key exchange: {0}")]
     Malformed(String),

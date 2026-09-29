@@ -28,6 +28,9 @@ const TOAST_DURATION: Duration = Duration::from_millis(2600);
 enum SftpConnectMsg {
     HostKey(oryxis_ssh::HostKeyQuery),
     ProxyCommand(oryxis_ssh::ProxyCommandQuery),
+    /// A security key waiting on a person; the mount has no card, so it
+    /// is said in a toast.
+    SecurityKey(oryxis_ssh::SecurityKeyNotice),
     Done(
         Result<
             (
@@ -254,6 +257,8 @@ impl Oryxis {
                 let stream = iced::stream::channel::<SftpConnectMsg>(
                     8,
                     move |mut sender: iced::futures::channel::mpsc::Sender<SftpConnectMsg>| async move {
+                        let (sk_notice_tx, mut sk_notice_rx) =
+                            tokio::sync::mpsc::unbounded_channel::<oryxis_ssh::SecurityKeyNotice>();
                         let engine = SshEngine::new()
                             .with_host_key_check(host_key_check)
                             .with_host_key_ask(hk_ask_tx)
@@ -264,7 +269,7 @@ impl Oryxis {
                             // a PIN only works where the OS dialog collects
                             // it (Windows Hello).
                             .with_security_key_prompts(
-                                crate::connect_methods::security_key_prompts(None),
+                                crate::connect_methods::security_key_prompts(Some(sk_notice_tx)),
                             )
                             .with_keepalive(keepalive)
                             .with_address_family(conn.address_family)
@@ -279,6 +284,13 @@ impl Oryxis {
                             .with_connect_timeout(connect_to)
                             .with_auth_timeout(auth_to)
                             .with_session_timeout(session_to);
+
+                        let mut sk_sender = sender.clone();
+                        let _sk_bridge = tokio::spawn(async move {
+                            while let Some(notice) = sk_notice_rx.recv().await {
+                                let _ = sk_sender.send(SftpConnectMsg::SecurityKey(notice)).await;
+                            }
+                        });
 
                         let mut pc_sender = sender.clone();
                         let _pc_bridge = tokio::spawn(async move {
@@ -343,6 +355,9 @@ impl Oryxis {
                 );
                 return Ok(Task::stream(stream).map(move |m| match m {
                     SftpConnectMsg::HostKey(q) => Message::Ssh(SshMessage::SshHostKeyVerify(q)),
+                    SftpConnectMsg::SecurityKey(notice) => Message::ToastShow(
+                        crate::connect_methods::security_key_notice_text(notice).to_string(),
+                    ),
                     SftpConnectMsg::ProxyCommand(q) => Message::Ssh(
                         SshMessage::SshProxyCommandVerify(
                             Box::new(q),

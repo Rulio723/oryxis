@@ -63,6 +63,18 @@ impl SkCredential {
         let private = PrivateKey::from_openssh(normalized.trim())
             .map_err(|e| SkError::NotASecurityKey(e.to_string()))?;
 
+        // The algorithm first: it sits in the file's clear public half, and
+        // an encrypted ORDINARY key must read as "not a security key", not
+        // as a passphrase-protected handle.
+        if !matches!(
+            private.algorithm(),
+            Algorithm::SkEd25519 | Algorithm::SkEcdsaSha2NistP256
+        ) {
+            return Err(SkError::NotASecurityKey(format!(
+                "it is a {} key",
+                private.algorithm().as_str()
+            )));
+        }
         if private.is_encrypted() {
             return Err(SkError::EncryptedHandle);
         }
@@ -137,10 +149,12 @@ impl SkCredential {
     }
 
     /// Whether the token must see a touch: every key `ssh-keygen` makes
-    /// without `-O no-touch-required`. A key that asks for verification
-    /// needs presence too, whatever the file's UP bit says.
+    /// without `-O no-touch-required`. The UP bit alone decides, as in
+    /// OpenSSH's `sk-usbhid.c`: a `verify-required,no-touch-required` key
+    /// is verified (PIN) without a touch, and asking for one here would be
+    /// a gesture OpenSSH never asks for with the same key.
     pub fn require_user_presence(&self) -> bool {
-        self.flags & FLAG_USER_PRESENCE_REQUIRED != 0 || self.require_user_verification()
+        self.flags & FLAG_USER_PRESENCE_REQUIRED != 0
     }
 
     /// `SHA256:...`, the fingerprint the vault shows for the public half.
@@ -234,13 +248,22 @@ mod tests {
         assert!(credential.fingerprint().starts_with("SHA256:"));
     }
 
-    /// `-O verify-required` sets the UV bit, and a UV key needs presence
-    /// too even if the file were to omit the UP bit.
+    /// `-O verify-required` sets the UV bit; presence follows the UP bit
+    /// alone, so `verify-required,no-touch-required` asks for no touch.
     #[test]
-    fn verify_required_implies_user_presence() {
+    fn verification_and_presence_are_independent_flags() {
         let text = sk_private_key(
             FIXTURE_PUBLIC,
             FLAG_USER_VERIFICATION_REQUIRED,
+            &FIXTURE_HANDLE,
+        );
+        let credential = SkCredential::from_openssh_private(&text).unwrap();
+        assert!(credential.require_user_verification());
+        assert!(!credential.require_user_presence());
+
+        let text = sk_private_key(
+            FIXTURE_PUBLIC,
+            FLAG_USER_VERIFICATION_REQUIRED | USER_PRESENCE,
             &FIXTURE_HANDLE,
         );
         let credential = SkCredential::from_openssh_private(&text).unwrap();
@@ -257,6 +280,23 @@ mod tests {
         assert!(credential.is_resident());
         assert_eq!(credential.key_handle(), &FIXTURE_HANDLE);
     }
+
+    /// An encrypted ordinary key is "not a security key", never a
+    /// passphrase-protected handle.
+    #[test]
+    fn an_encrypted_software_key_is_not_called_a_security_key() {
+        use russh::keys::ssh_key::{Algorithm, LineEnding, PrivateKey};
+        let encrypted = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519)
+            .unwrap()
+            .encrypt(&mut rand010::rng(), "hunter2")
+            .unwrap()
+            .to_openssh(LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let err = SkCredential::from_openssh_private(&encrypted).unwrap_err();
+        assert!(matches!(err, SkError::NotASecurityKey(_)), "got {err:?}");
+    }
+
 
     #[test]
     fn parses_an_ecdsa_security_key() {

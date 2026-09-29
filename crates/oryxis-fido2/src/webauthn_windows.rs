@@ -55,12 +55,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 // Struct versions and enum values, from the Windows SDK's `webauthn.h`.
 //
-// The options struct version is the interesting one. The SDK's
-// `..._CURRENT_VERSION` is 5, but everything above 3 is for features this
-// module does not use (credential-ex large blobs), and older builds of the
-// API reject a version they do not know. Version 3 is the oldest that
-// still carries `dwUserVerificationRequirement`, which is the one field
-// past version 1 that matters here.
+// The options struct version is the interesting one. Later SDKs define
+// higher versions for features this module does not use (large blobs and
+// beyond), and older builds of the API reject a version they do not know.
+// Version 3 is the oldest that carries `pCancellationId`, the one field
+// past version 1 this module needs (`dwUserVerificationRequirement` is in
+// version 1 already).
 const CLIENT_DATA_VERSION: u32 = 1;
 const CREDENTIAL_VERSION: u32 = 1;
 const ASSERTION_OPTIONS_VERSION: u32 = 3;

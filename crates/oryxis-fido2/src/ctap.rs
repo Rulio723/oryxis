@@ -36,6 +36,26 @@ const CMD_CANCEL: u8 = 0x11 | INIT_PACKET_FLAG;
 const CMD_KEEPALIVE: u8 = 0x3b | INIT_PACKET_FLAG;
 const CMD_ERROR: u8 = 0x3f | INIT_PACKET_FLAG;
 
+/// `CAPFLAG_CBOR` in the `CTAPHID_INIT` reply: the token speaks CTAP2. A
+/// token without it is U2F (CTAP1) only and gets APDUs over `CTAPHID_MSG`.
+const CAPFLAG_CBOR: u8 = 0x04;
+
+/// U2F `AUTHENTICATE` (CTAP1): instruction byte and the two control bytes.
+const U2F_INS_AUTHENTICATE: u8 = 0x02;
+/// Sign, and require a touch.
+const U2F_ENFORCE_PRESENCE: u8 = 0x03;
+/// Only say whether the key handle is ours; never signs.
+const U2F_CHECK_ONLY: u8 = 0x07;
+/// `SW_NO_ERROR`.
+const SW_OK: u16 = 0x9000;
+/// `SW_CONDITIONS_NOT_SATISFIED`: waiting for a touch (sign), or "yes,
+/// this handle is mine" (check-only).
+const SW_CONDITIONS_NOT_SATISFIED: u16 = 0x6985;
+/// `SW_WRONG_DATA`: not a handle this token issued.
+const SW_WRONG_DATA: u16 = 0x6a80;
+/// How often a U2F token is asked again while it waits for a touch.
+const U2F_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+
 /// `CTAPHID_KEEPALIVE` status: the token wants a touch.
 const KEEPALIVE_UP_NEEDED: u8 = 1;
 /// `CTAPHID_KEEPALIVE` status: the token wants user verification.
@@ -118,6 +138,9 @@ pub fn get_assertion(
 ) -> Result<Assertion, Error> {
     let client_data_hash: [u8; 32] = Sha256::digest(&request.message).into();
     let mut channel = Channel::open(transport, interaction)?;
+    if !channel.cbor {
+        return channel.u2f_authenticate(request, &client_data_hash, interaction, touch_timeout);
+    }
 
     // User verification is decided up front when the credential demands
     // it; otherwise only if the token turns out to demand it anyway
@@ -147,6 +170,111 @@ pub fn get_assertion(
             Some(code) => return Err(map_ctap_error(code)),
             None => return Err(Error::Malformed("empty CTAP2 response".into())),
         }
+    }
+}
+
+/// Run the request on whichever of `devices` holds the credential.
+///
+/// With one device, or no handle to look for, the first one is asked (a
+/// discoverable credential is found by the token itself). With several,
+/// each is probed SILENTLY first, `up: false` with the handle in the
+/// allow-list (U2F: check-only), the way OpenSSH's `sk-usbhid.c` picks a
+/// token: otherwise a credential on the second key fails as "not found"
+/// on the first, possibly after the person touched the wrong one.
+pub fn get_assertion_from(
+    devices: &mut [Box<dyn HidTransport>],
+    request: &AssertionRequest,
+    interaction: &Interaction,
+    touch_timeout: Duration,
+) -> Result<Assertion, Error> {
+    let handle = request.allow_credential.as_deref().filter(|h| !h.is_empty());
+    let (Some(handle), true) = (handle, devices.len() > 1) else {
+        let first = devices.first_mut().ok_or_else(|| {
+            Error::DeviceNotFound("no FIDO security key is plugged in".into())
+        })?;
+        return get_assertion(first.as_mut(), request, interaction, touch_timeout);
+    };
+    for (index, device) in devices.iter_mut().enumerate() {
+        match holds_credential(device.as_mut(), request, handle, interaction) {
+            Ok(true) => {
+                return get_assertion(device.as_mut(), request, interaction, touch_timeout);
+            }
+            Ok(false) => tracing::debug!(index, "security key does not hold the credential"),
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(error) => tracing::debug!(index, %error, "security key probe failed"),
+        }
+    }
+    Err(Error::CredentialNotFound)
+}
+
+/// Whether the token behind `transport` holds `handle`, asked without a
+/// touch.
+fn holds_credential(
+    transport: &mut dyn HidTransport,
+    request: &AssertionRequest,
+    handle: &[u8],
+    interaction: &Interaction,
+) -> Result<bool, Error> {
+    let client_data_hash: [u8; 32] = Sha256::digest(&request.message).into();
+    let mut channel = Channel::open(transport, interaction)?;
+    if !channel.cbor {
+        let apdu = u2f_apdu(U2F_CHECK_ONLY, &client_data_hash, &request.application, handle)?;
+        let reply = channel.call_command(
+            CMD_MSG,
+            &apdu,
+            Instant::now() + MACHINE_TIMEOUT,
+            interaction,
+            false,
+        )?;
+        return Ok(status_word(&reply)? == SW_CONDITIONS_NOT_SATISFIED);
+    }
+    let probe = AssertionRequest {
+        user_presence: false,
+        user_verification: false,
+        ..request.clone()
+    };
+    let payload = encode_get_assertion(&probe, &client_data_hash, None)?;
+    let reply = channel.call(&payload, Instant::now() + MACHINE_TIMEOUT, interaction, false)?;
+    Ok(match reply.first().copied() {
+        Some(CTAP2_OK) => true,
+        // An `alwaysUv` token refuses even a silent probe until verified:
+        // it cannot say no, so it stays a candidate.
+        Some(CTAP2_ERR_PUAT_REQUIRED) => true,
+        _ => false,
+    })
+}
+
+/// A U2F `AUTHENTICATE` APDU in extended-length form: challenge (the
+/// client data hash), application (the SHA-256 of the relying party),
+/// then the key handle.
+fn u2f_apdu(
+    control: u8,
+    client_data_hash: &[u8; 32],
+    application: &str,
+    handle: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let handle_len = u8::try_from(handle.len())
+        .map_err(|_| Error::Malformed("a U2F key handle is at most 255 bytes".into()))?;
+    let application_hash: [u8; 32] = Sha256::digest(application.as_bytes()).into();
+    let data_len = 32 + 32 + 1 + handle.len();
+    let mut apdu = Vec::with_capacity(7 + data_len + 2);
+    apdu.extend_from_slice(&[0x00, U2F_INS_AUTHENTICATE, control, 0x00]);
+    apdu.push(0x00);
+    apdu.extend_from_slice(&(data_len as u16).to_be_bytes());
+    apdu.extend_from_slice(client_data_hash);
+    apdu.extend_from_slice(&application_hash);
+    apdu.push(handle_len);
+    apdu.extend_from_slice(handle);
+    // Le: up to 65536 bytes of response.
+    apdu.extend_from_slice(&[0x00, 0x00]);
+    Ok(apdu)
+}
+
+/// The trailing ISO 7816 status word of an APDU response.
+fn status_word(reply: &[u8]) -> Result<u16, Error> {
+    match reply {
+        [.., a, b] => Ok(u16::from_be_bytes([*a, *b])),
+        _ => Err(Error::Malformed("U2F response shorter than a status word".into())),
     }
 }
 
@@ -206,6 +334,8 @@ impl Info {
 struct Channel<'a> {
     transport: &'a mut dyn HidTransport,
     cid: u32,
+    /// The token speaks CTAP2 (`CAPFLAG_CBOR`); otherwise U2F only.
+    cbor: bool,
 }
 
 impl<'a> Channel<'a> {
@@ -214,8 +344,74 @@ impl<'a> Channel<'a> {
         transport: &'a mut dyn HidTransport,
         interaction: &Interaction,
     ) -> Result<Self, Error> {
-        let cid = init_channel(transport, interaction)?;
-        Ok(Self { transport, cid })
+        let (cid, capabilities) = init_channel(transport, interaction)?;
+        Ok(Self {
+            transport,
+            cid,
+            cbor: capabilities & CAPFLAG_CBOR != 0,
+        })
+    }
+
+    /// U2F `AUTHENTICATE` on a token without CTAP2: sign with a touch,
+    /// re-asking while the token answers "waiting for presence". U2F has
+    /// no user verification and no discoverable credentials, so a
+    /// credential asking for either is refused by name.
+    fn u2f_authenticate(
+        &mut self,
+        request: &AssertionRequest,
+        client_data_hash: &[u8; 32],
+        interaction: &Interaction,
+        touch_timeout: Duration,
+    ) -> Result<Assertion, Error> {
+        if request.user_verification {
+            return Err(Error::UnsupportedByToken(
+                "it is a U2F-only key, and this credential requires user verification",
+            ));
+        }
+        let handle = request
+            .allow_credential
+            .as_deref()
+            .filter(|h| !h.is_empty())
+            .ok_or(Error::CredentialNotFound)?;
+        let apdu = u2f_apdu(U2F_ENFORCE_PRESENCE, client_data_hash, &request.application, handle)?;
+        let deadline = Instant::now() + touch_timeout;
+        let mut announced = false;
+        loop {
+            let reply = self.call_command(CMD_MSG, &apdu, deadline, interaction, true)?;
+            match status_word(&reply)? {
+                SW_OK => {
+                    // user presence (1) || counter (4) || DER signature
+                    let body = &reply[..reply.len() - 2];
+                    if body.len() < 6 {
+                        return Err(Error::Malformed("U2F signature response too short".into()));
+                    }
+                    return Ok(Assertion {
+                        signature: body[5..].to_vec(),
+                        flags: body[0],
+                        counter: u32::from_be_bytes([body[1], body[2], body[3], body[4]]),
+                    });
+                }
+                SW_CONDITIONS_NOT_SATISFIED => {
+                    if !announced {
+                        announced = true;
+                        interaction.event(TokenEvent::TouchNeeded);
+                    }
+                    if interaction.cancel.is_cancelled() {
+                        return Err(Error::Cancelled);
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(Error::TouchTimeout);
+                    }
+                    std::thread::sleep(U2F_RETRY_INTERVAL);
+                }
+                SW_WRONG_DATA => return Err(Error::CredentialNotFound),
+                other => {
+                    return Err(Error::Transport(format!(
+                        "the U2F security key answered status 0x{other:04x}"
+                    )));
+                }
+            }
+        }
     }
 
     /// Send one CTAP2 message and read the reply, status byte first.
@@ -229,7 +425,20 @@ impl<'a> Channel<'a> {
         interaction: &Interaction,
         human: bool,
     ) -> Result<Vec<u8>, Error> {
-        send(self.transport, self.cid, CMD_CBOR, payload)?;
+        self.call_command(CMD_CBOR, payload, deadline, interaction, human)
+    }
+
+    /// [`Channel::call`] for any CTAPHID command (`CTAPHID_MSG` carries
+    /// U2F APDUs).
+    fn call_command(
+        &mut self,
+        command: u8,
+        payload: &[u8],
+        deadline: Instant,
+        interaction: &Interaction,
+        human: bool,
+    ) -> Result<Vec<u8>, Error> {
+        send(self.transport, self.cid, command, payload)?;
 
         let mut assembled: Vec<u8> = Vec::new();
         let mut expected: Option<usize> = None;
@@ -500,8 +709,12 @@ fn cose_key(cbor: &mut Cbor, x: &[u8; 32], y: &[u8; 32]) {
     cbor.int(-3).bytes(y);
 }
 
-/// Open a CTAPHID channel with `CTAPHID_INIT`.
-fn init_channel(transport: &mut dyn HidTransport, interaction: &Interaction) -> Result<u32, Error> {
+/// Open a CTAPHID channel with `CTAPHID_INIT`: the channel id and the
+/// token's capability flags.
+fn init_channel(
+    transport: &mut dyn HidTransport,
+    interaction: &Interaction,
+) -> Result<(u32, u8), Error> {
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce)
         .map_err(|e| Error::Transport(format!("no randomness for CTAPHID_INIT: {e}")))?;
@@ -539,7 +752,9 @@ fn init_channel(transport: &mut dyn HidTransport, interaction: &Interaction) -> 
                 "the security key handed back an unusable channel id".into(),
             ));
         }
-        return Ok(channel);
+        // nonce(8) cid(4) protocol(1) version(3) capabilities(1), after
+        // the seven header bytes.
+        return Ok((channel, reply[7 + 16]));
     }
 }
 

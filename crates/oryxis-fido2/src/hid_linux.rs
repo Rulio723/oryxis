@@ -37,29 +37,33 @@ impl Authenticator for LinuxHidAuthenticator {
         request: &AssertionRequest,
         interaction: &Interaction,
     ) -> Result<Assertion, Error> {
-        let mut device = open_first()?;
-        ctap::get_assertion(&mut device, request, interaction, DEFAULT_TOUCH_TIMEOUT)
+        let mut devices = open_all()?;
+        ctap::get_assertion_from(&mut devices, request, interaction, DEFAULT_TOUCH_TIMEOUT)
     }
 }
 
-/// Open the first FIDO interface that will have us. One refusal does not
-/// end the search (a second token may be free), but the last reason is
-/// what gets reported when none opens.
-fn open_first() -> Result<HidrawDevice, Error> {
+/// Every FIDO interface that will have us; the CTAP layer picks the one
+/// holding the credential. One refusal does not end the search, but the
+/// last reason is what gets reported when none opens.
+fn open_all() -> Result<Vec<Box<dyn HidTransport>>, Error> {
     let nodes = fido_nodes(Path::new("/sys/class/hidraw"));
     if nodes.is_empty() {
         return Err(Error::DeviceNotFound(
             "no FIDO security key is plugged in".into(),
         ));
     }
+    let mut devices: Vec<Box<dyn HidTransport>> = Vec::new();
     let mut last_error = None;
     for node in nodes {
         match HidrawDevice::open(&node) {
-            Ok(device) => return Ok(device),
+            Ok(device) => devices.push(Box::new(device)),
             Err(e) => last_error = Some(e),
         }
     }
-    Err(last_error.expect("at least one node was tried"))
+    if devices.is_empty() {
+        return Err(last_error.expect("at least one node was tried"));
+    }
+    Ok(devices)
 }
 
 /// `/dev/<node>` for every hidraw node whose report descriptor is FIDO.

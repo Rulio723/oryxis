@@ -120,6 +120,11 @@ impl Oryxis {
                         let Some(conn) = self.any_connection_by_label(base) else {
                             return false;
                         };
+                        // Nobody started this dial, so it may not ask for a
+                        // touch: a security-key host waits for a click.
+                        if self.host_signs_with_token(conn) {
+                            return false;
+                        }
                         let attempts = self.reconnect_counters.get(&conn.id).copied().unwrap_or(0);
                         attempts < max_attempts
                     });

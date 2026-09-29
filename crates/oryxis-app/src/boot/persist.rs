@@ -577,8 +577,12 @@ impl Oryxis {
         if let crate::state::PinnedTabSpec::Host { id, .. } = spec
             && self.connections.iter().any(|c| {
                 c.id == *id
-                    && c.protocol
+                    && (c.protocol
                         == oryxis_core::models::connection::ConnectionProtocol::RemoteDesktop
+                        // A launch dial is one nobody started, so it may not
+                        // ask for a touch: a security-key host connects when
+                        // its chip is selected, and its hint says so.
+                        || self.host_signs_with_token(c))
             })
         {
             return false;

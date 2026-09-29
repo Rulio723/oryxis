@@ -25,17 +25,29 @@ pub(crate) fn conn_uses_key(conn: &Connection) -> bool {
 
 /// Which `~/.ssh` default names the disk-key scan may pick for a host.
 ///
-/// A `SecurityKey` host scans only the `_sk` files: a software key there
-/// would be picked first ("first usable wins") and then refused by the
-/// method, a failure that reads as "my key is broken". Everywhere else the
-/// `_sk` files come after every software key, and only where this build
-/// can sign with a token at all. An explicit `identity_file` is never
-/// filtered: typing a path is the choice of key.
+/// - `SecurityKey` scans only the `_sk` files: a software key there would
+///   be picked first ("first usable wins") and then refused by the method,
+///   a failure that reads as "my key is broken".
+/// - `Key` / `Certificate` take the `_sk` files after every software key,
+///   where this build can sign with a token at all: the method is "this
+///   key", and a machine whose only key is a token handle means that one.
+/// - `Auto` never scans them. Its point is to fall through to the agent
+///   and the password, and a token that is not plugged in holds the dial
+///   on the OS prompt for the whole auth budget before `Auto` could move
+///   on. A handle PICKED for an `Auto` host still signs; only the guess is
+///   off.
+///
+/// An explicit `identity_file` is never filtered: typing a path is the
+/// choice of key.
 pub(crate) fn disk_key_wanted(auth: &AuthMethod) -> oryxis_vault::DiskKeyWanted {
     use oryxis_vault::DiskKeyWanted;
     match auth {
         AuthMethod::SecurityKey => DiskKeyWanted::SecurityKey,
-        _ if oryxis_ssh::sk::native_signing_supported() => DiskKeyWanted::SoftwareThenSecurityKey,
+        AuthMethod::Key | AuthMethod::Certificate
+            if oryxis_ssh::sk::native_signing_supported() =>
+        {
+            DiskKeyWanted::SoftwareThenSecurityKey
+        }
         _ => DiskKeyWanted::Software,
     }
 }
@@ -90,6 +102,37 @@ impl Oryxis {
             .find(|k| k.id == kid)
             .map(|k| k.public_key.clone())
             .filter(|p| !p.trim().is_empty())
+    }
+
+    /// Whether connecting to `conn` would ask a person to touch a security
+    /// key: the Security Key method, or a key (vault row or the `~/.ssh`
+    /// file the host would pick) that is a token handle.
+    ///
+    /// Dials nobody started (the auto-reconnect sweep, "connect at launch")
+    /// skip such hosts and leave them to a click: a prompt that appears on
+    /// its own is the one people learn to touch without reading.
+    pub(crate) fn host_signs_with_token(&self, conn: &Connection) -> bool {
+        if conn.auth_method == AuthMethod::SecurityKey {
+            return true;
+        }
+        if !conn_uses_key(conn) {
+            return false;
+        }
+        let kid = conn.key_id.or_else(|| {
+            conn.identity_id.and_then(|iid| {
+                self.identities.iter().find(|i| i.id == iid).and_then(|i| i.key_id)
+            })
+        });
+        if let Some(key) = kid.and_then(|kid| self.keys.iter().find(|k| k.id == kid)) {
+            return key.algorithm.is_security_key() && key.has_private;
+        }
+        oryxis_vault::resolve_disk_key(
+            conn.use_disk_key,
+            conn.identity_file.as_deref(),
+            disk_key_wanted(&conn.auth_method),
+        )
+        .material()
+        .is_some_and(|(pem, _)| oryxis_ssh::SkCredential::from_openssh_private(&pem).is_ok())
     }
 
     /// Resolve `(password, private_key_pem, certificate)` for a connection,
@@ -735,15 +778,18 @@ mod tests {
     }
 
     #[test]
-    fn a_hardware_only_host_scans_only_security_key_files() {
+    fn the_disk_scan_takes_what_the_method_wants() {
         use oryxis_vault::DiskKeyWanted;
         assert_eq!(disk_key_wanted(&AuthMethod::SecurityKey), DiskKeyWanted::SecurityKey);
-        let expected = if oryxis_ssh::sk::native_signing_supported() {
+        let explicit_key = if oryxis_ssh::sk::native_signing_supported() {
             DiskKeyWanted::SoftwareThenSecurityKey
         } else {
             DiskKeyWanted::Software
         };
-        assert_eq!(disk_key_wanted(&AuthMethod::Key), expected);
-        assert_eq!(disk_key_wanted(&AuthMethod::Auto), expected);
+        assert_eq!(disk_key_wanted(&AuthMethod::Key), explicit_key);
+        assert_eq!(disk_key_wanted(&AuthMethod::Certificate), explicit_key);
+        // `Auto` never guesses a token: a missing one would hold the dial
+        // on the OS prompt past the point `Auto` could fall through.
+        assert_eq!(disk_key_wanted(&AuthMethod::Auto), DiskKeyWanted::Software);
     }
 }

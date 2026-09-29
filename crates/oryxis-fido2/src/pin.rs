@@ -336,4 +336,49 @@ mod tests {
         assert!(agree(Protocol::Two, &[1u8; 32], &[2u8; 32]).is_err());
         assert!(agree(Protocol::Two, &[1u8; 31], &[2u8; 32]).is_err());
     }
+
+    /// Known answers computed OUTSIDE this crate (OpenSSL's `enc
+    /// -aes-256-cbc -nopad` and Python's `hmac` / `hashlib`, HKDF by hand
+    /// per RFC 5869), so a mistake made symmetrically on both sides of the
+    /// simulated token (a wrong label, salt or IV rule) still fails here.
+    /// Z = 00 01 .. 1f, plaintext = 40 41 .. 4f, message = "client data hash".
+    #[test]
+    fn known_answers_for_both_protocols() {
+        fn hex(text: &str) -> Vec<u8> {
+            (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+                .collect()
+        }
+        let z: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let plaintext: [u8; 16] = std::array::from_fn(|i| 0x40 + i as u8);
+        let message = b"client data hash";
+
+        let one = SharedSecret::derive(Protocol::One, &z);
+        assert_eq!(
+            one.aes_key.as_ref().to_vec(),
+            hex("630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd")
+        );
+        assert_eq!(one.hmac_key.as_ref(), one.aes_key.as_ref());
+        assert_eq!(one.encrypt(&plaintext).unwrap(), hex("78e7e8966d197598397065dd603b79a8"));
+        assert_eq!(one.authenticate(message), hex("a39aeb279076e22ab6f9e006603a7535"));
+
+        let two = SharedSecret::derive(Protocol::Two, &z);
+        assert_eq!(
+            two.hmac_key.as_ref().to_vec(),
+            hex("a689b3b92a6ebab91192408da9c4f05c674a2bc5f938d613077716c719a8df39")
+        );
+        assert_eq!(
+            two.aes_key.as_ref().to_vec(),
+            hex("0f6ff2ef211829c11638ef2893ea02edf195658c0572393e7680d93bc2b58d44")
+        );
+        // Protocol 2 picks a random IV, so the known answer is checked on
+        // the decrypt side: IV (a5 x 16) || ciphertext from OpenSSL.
+        let sealed = hex("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5534c065047cf2bbea682966ed2abe4f0");
+        assert_eq!(two.decrypt(&sealed).unwrap().as_slice(), &plaintext);
+        assert_eq!(
+            two.authenticate(message),
+            hex("b29d01f538a5fd69d96f40acf6c6a259ad7629b61eaf574c739120c41aea3ec1")
+        );
+    }
 }

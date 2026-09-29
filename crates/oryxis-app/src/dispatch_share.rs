@@ -25,6 +25,8 @@ enum BackupOutcome {
 enum BackupConnectMsg {
     HostKey(oryxis_ssh::HostKeyQuery),
     ProxyCommand(oryxis_ssh::ProxyCommandQuery),
+    /// A security key waiting on a person, said in a toast.
+    SecurityKey(oryxis_ssh::SecurityKeyNotice),
     Done(Result<BackupOutcome, String>),
     NoCommonAlgo {
         category: oryxis_ssh::NegCategory,
@@ -1288,6 +1290,8 @@ impl Oryxis {
         let stream = iced::stream::channel::<BackupConnectMsg>(
             8,
             move |mut sender: iced::futures::channel::mpsc::Sender<BackupConnectMsg>| async move {
+                let (sk_notice_tx, mut sk_notice_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<oryxis_ssh::SecurityKeyNotice>();
                 let engine = SshEngine::new()
                     .with_host_key_check(host_key_check)
                     .with_host_key_ask(hk_ask_tx)
@@ -1295,7 +1299,9 @@ impl Oryxis {
                     .with_totp_secret(totp_secret.as_deref())
                     // The user confirmed this backup: a touch may be asked
                     // for (no PIN prompt surface here, as for SFTP).
-                    .with_security_key_prompts(crate::connect_methods::security_key_prompts(None))
+                    .with_security_key_prompts(crate::connect_methods::security_key_prompts(Some(
+                        sk_notice_tx,
+                    )))
                     .with_keepalive(keepalive)
                     .with_address_family(conn.address_family)
                     .with_rekey_limit_mb(conn.rekey_limit_mb)
@@ -1316,6 +1322,13 @@ impl Oryxis {
                         let _ = sender_clone.send(BackupConnectMsg::HostKey(query)).await;
                         let accepted = hk_resp_rx.recv().await.unwrap_or(false);
                         let _ = resp_tx.send(accepted);
+                    }
+                });
+
+                let mut sk_sender = sender.clone();
+                let _sk_bridge = tokio::spawn(async move {
+                    while let Some(notice) = sk_notice_rx.recv().await {
+                        let _ = sk_sender.send(BackupConnectMsg::SecurityKey(notice)).await;
                     }
                 });
 
@@ -1382,6 +1395,9 @@ impl Oryxis {
         );
         Task::stream(stream).map(move |m| match m {
             BackupConnectMsg::HostKey(q) => Message::Ssh(SshMessage::SshHostKeyVerify(q)),
+            BackupConnectMsg::SecurityKey(notice) => Message::ToastShow(
+                crate::connect_methods::security_key_notice_text(notice).to_string(),
+            ),
             BackupConnectMsg::ProxyCommand(q) => Message::Ssh(SshMessage::SshProxyCommandVerify(
                 Box::new(q),
                 crate::state::ProxyConsentMode::Ask,

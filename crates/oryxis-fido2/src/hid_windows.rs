@@ -68,26 +68,30 @@ impl Authenticator for WindowsHidAuthenticator {
         request: &AssertionRequest,
         interaction: &Interaction,
     ) -> Result<Assertion, Error> {
-        let mut device = open_first()?;
-        ctap::get_assertion(&mut device, request, interaction, DEFAULT_TOUCH_TIMEOUT)
+        let mut devices = open_all()?;
+        ctap::get_assertion_from(&mut devices, request, interaction, DEFAULT_TOUCH_TIMEOUT)
     }
 }
 
-/// Open the first FIDO interface that will have us. More than one token
-/// can be plugged in, and one of them can be busy with another
-/// application, so one refusal is not the end of the search, but the
-/// reason the last one gave is, because "no key found" is the wrong thing
-/// to say when the key was found and would not open.
-fn open_first() -> Result<HidDevice, Error> {
+/// Every FIDO interface that will have us; the CTAP layer picks the one
+/// holding the credential. One can be busy with another application, so
+/// one refusal does not end the search, but the last reason is what gets
+/// reported when none opens: "no key found" is the wrong thing to say
+/// when the key was found and would not open.
+fn open_all() -> Result<Vec<Box<dyn HidTransport>>, Error> {
+    let mut devices: Vec<Box<dyn HidTransport>> = Vec::new();
     let mut last_error = None;
     for path in fido_interfaces()? {
         match HidDevice::open(&path) {
-            Ok(device) => return Ok(device),
+            Ok(device) => devices.push(Box::new(device)),
             Err(e) => last_error = Some(e),
         }
     }
-    Err(last_error
-        .unwrap_or_else(|| Error::DeviceNotFound("no FIDO security key is plugged in".into())))
+    if devices.is_empty() {
+        return Err(last_error
+            .unwrap_or_else(|| Error::DeviceNotFound("no FIDO security key is plugged in".into())));
+    }
+    Ok(devices)
 }
 
 /// Every HID interface on the machine that is a FIDO token, as
@@ -378,12 +382,16 @@ impl HidDevice {
         match unsafe { WaitForSingleObject(self.event, millis) } {
             WAIT_OBJECT_0 => {}
             WAIT_TIMEOUT => {
-                unsafe {
+                // Reap the cancellation so the channel is usable again. The
+                // read can complete between the timeout and the cancel, in
+                // which case it is a report like any other: dropping it
+                // loses a continuation packet (a sequence error) or the
+                // reply itself (a wait until the touch deadline).
+                let completed = unsafe {
                     CancelIoEx(self.handle, &self.overlapped);
-                    // Reap the cancellation so the channel is usable again.
-                    GetOverlappedResult(self.handle, &self.overlapped, transferred, 1);
-                }
-                return Ok(false);
+                    GetOverlappedResult(self.handle, &self.overlapped, transferred, 1)
+                } != 0;
+                return Ok(completed && *transferred > 0);
             }
             other => {
                 return Err(Error::Transport(format!(

@@ -183,7 +183,8 @@ fn sk_error_exit_code(error: &SkError) -> ExitCode {
             | Token::PinInvalid { .. }
             | Token::PinBlocked(_)
             | Token::PinNotSet
-            | Token::UserVerificationBlocked,
+            | Token::UserVerificationBlocked
+            | Token::UnsupportedByToken(_),
         ) => 12,
         SkError::Token(Token::TouchTimeout | Token::Cancelled) => 13,
         SkError::Token(Token::CredentialNotFound) => 14,

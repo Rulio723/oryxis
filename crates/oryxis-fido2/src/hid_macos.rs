@@ -54,8 +54,8 @@ const DEFAULT_TOUCH_TIMEOUT: Duration = Duration::from_secs(120);
 /// The run-loop mode our input callback is scheduled in.
 const RUN_LOOP_MODE: &CStr = c"com.oryxis.fido2";
 
-/// `kCFRunLoopRunHandledSource`: a source fired and the spin returned.
-const RUN_HANDLED_SOURCE: i32 = 4;
+/// `kCFRunLoopRunFinished`: the mode has no sources left to run.
+const RUN_FINISHED: i32 = 1;
 
 /// Signs with whatever FIDO2 token is plugged in.
 pub(crate) struct MacHidAuthenticator;
@@ -67,8 +67,8 @@ impl Authenticator for MacHidAuthenticator {
         interaction: &Interaction,
     ) -> Result<Assertion, Error> {
         let manager = Manager::matching_fido()?;
-        let mut device = manager.open_first()?;
-        ctap::get_assertion(&mut device, request, interaction, DEFAULT_TOUCH_TIMEOUT)
+        let mut devices = manager.open_all()?;
+        ctap::get_assertion_from(&mut devices, request, interaction, DEFAULT_TOUCH_TIMEOUT)
     }
 }
 
@@ -138,9 +138,10 @@ impl Manager {
         }
     }
 
-    /// Open the first FIDO device that will have us, reporting the last
-    /// refusal rather than "no key" when one was there and would not open.
-    fn open_first(&self) -> Result<MacHidDevice, Error> {
+    /// Every FIDO device that will have us (the CTAP layer picks the one
+    /// holding the credential), reporting the last refusal rather than "no
+    /// key" when one was there and would not open.
+    fn open_all(&self) -> Result<Vec<Box<dyn HidTransport>>, Error> {
         let devices = unsafe { IOHIDManagerCopyDevices(self.0.0 as IOHIDManagerRef) };
         if devices.is_null() {
             return Err(Error::DeviceNotFound(
@@ -156,14 +157,18 @@ impl Manager {
         }
         let mut refs: Vec<*const c_void> = vec![std::ptr::null(); count as usize];
         unsafe { CFSetGetValues(devices.0 as _, refs.as_mut_ptr()) };
+        let mut devices: Vec<Box<dyn HidTransport>> = Vec::new();
         let mut last_error = None;
         for device in refs {
             match MacHidDevice::open(device as IOHIDDeviceRef) {
-                Ok(device) => return Ok(device),
+                Ok(device) => devices.push(Box::new(device)),
                 Err(e) => last_error = Some(e),
             }
         }
-        Err(last_error.expect("the set was not empty"))
+        if devices.is_empty() {
+            return Err(last_error.expect("the set was not empty"));
+        }
+        Ok(devices)
     }
 }
 
@@ -187,20 +192,26 @@ unsafe extern "C" fn on_input_report(
     if result != kIOReturnSuccess || context.is_null() || report.is_null() {
         return;
     }
-    // Runs on this same thread, inside `CFRunLoopRunInMode`, while
-    // `read_packet` holds no borrow of the inbox.
-    let inbox = unsafe { &mut *(context as *mut Inbox) };
+    // Copy out of IOKit's buffer BEFORE a reference to the inbox exists:
+    // `report` points into `Inbox::buffer`, and reading through it after
+    // forming `&mut Inbox` would alias that borrow.
     let length = (length.max(0) as usize).min(HID_PACKET_LEN);
     let mut packet = [0u8; HID_PACKET_LEN];
-    packet[..length].copy_from_slice(unsafe { std::slice::from_raw_parts(report, length) });
-    inbox.packets.push_back(packet);
+    unsafe { std::ptr::copy_nonoverlapping(report, packet.as_mut_ptr(), length) };
+    // Runs on this same thread, inside `CFRunLoopRunInMode`, and only the
+    // queue is touched, never the buffer.
+    let packets = unsafe { &mut (*(context as *mut Inbox)).packets };
+    packets.push_back(packet);
 }
 
 /// An open FIDO interface, scheduled on this thread's run loop.
 struct MacHidDevice {
     device: IOHIDDeviceRef,
     mode: Owned,
-    inbox: Box<Inbox>,
+    /// Owned through a raw pointer (from `Box::into_raw`, freed in `Drop`)
+    /// because IOKit holds it as the callback's context: no `Box` or
+    /// `&mut` may claim it exclusively while the callback can run.
+    inbox: *mut Inbox,
 }
 
 impl MacHidDevice {
@@ -216,17 +227,16 @@ impl MacHidDevice {
             // own for as long as it is open.
             CFRetain(device as CFTypeRef);
             let mode = cf_string(RUN_LOOP_MODE);
-            let mut inbox = Box::new(Inbox {
+            let inbox = Box::into_raw(Box::new(Inbox {
                 buffer: [0u8; HID_PACKET_LEN],
                 packets: VecDeque::new(),
-            });
-            let context: *mut Inbox = &mut *inbox;
+            }));
             IOHIDDeviceRegisterInputReportCallback(
                 device,
-                (*context).buffer.as_mut_ptr(),
+                std::ptr::addr_of_mut!((*inbox).buffer).cast(),
                 HID_PACKET_LEN as CFIndex,
                 on_input_report,
-                context.cast(),
+                inbox.cast(),
             );
             IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetCurrent(), mode.0 as CFStringRef);
             Ok(Self {
@@ -250,6 +260,7 @@ impl Drop for MacHidDevice {
             );
             IOHIDDeviceClose(self.device, kIOHIDOptionsTypeNone);
             CFRelease(self.device as CFTypeRef);
+            drop(Box::from_raw(self.inbox));
         }
     }
 }
@@ -277,7 +288,8 @@ impl HidTransport for MacHidDevice {
     }
 
     fn read_packet(&mut self, timeout: Duration) -> Result<Option<[u8; HID_PACKET_LEN]>, Error> {
-        if let Some(packet) = self.inbox.packets.pop_front() {
+        let pop = |inbox: *mut Inbox| unsafe { (*inbox).packets.pop_front() };
+        if let Some(packet) = pop(self.inbox) {
             return Ok(Some(packet));
         }
         // One bounded spin of our own mode: returns as soon as a report
@@ -285,8 +297,14 @@ impl HidTransport for MacHidDevice {
         let result = unsafe {
             CFRunLoopRunInMode(self.mode.0 as CFStringRef, timeout.as_secs_f64(), 1)
         };
-        if result == RUN_HANDLED_SOURCE || !self.inbox.packets.is_empty() {
-            return Ok(self.inbox.packets.pop_front());
+        if let Some(packet) = pop(self.inbox) {
+            return Ok(Some(packet));
+        }
+        // No source left in our mode: the device went away (IOKit drops
+        // it from the run loop), and spinning again would return at once
+        // until the deadline.
+        if result == RUN_FINISHED {
+            return Err(Error::Transport("the security key was removed".into()));
         }
         Ok(None)
     }

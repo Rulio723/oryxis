@@ -12,6 +12,7 @@ use crate::pin::SharedSecret;
 /// canned packet stream for everything else.
 struct ScriptedDevice {
     channel: u32,
+    capabilities: u8,
     replies: VecDeque<[u8; HID_PACKET_LEN]>,
     written: Vec<[u8; HID_PACKET_LEN]>,
 }
@@ -20,8 +21,17 @@ impl ScriptedDevice {
     fn new(channel: u32, replies: Vec<[u8; HID_PACKET_LEN]>) -> Self {
         Self {
             channel,
+            capabilities: CAPFLAG_CBOR,
             replies: replies.into(),
             written: Vec::new(),
+        }
+    }
+
+    /// A token that answers INIT without `CAPFLAG_CBOR`: U2F only.
+    fn u2f_only(channel: u32, replies: Vec<[u8; HID_PACKET_LEN]>) -> Self {
+        Self {
+            capabilities: 0,
+            ..Self::new(channel, replies)
         }
     }
 }
@@ -71,12 +81,27 @@ fn packets(channel: u32, command: u8, message: &[u8]) -> Vec<[u8; HID_PACKET_LEN
 }
 
 /// The 17-byte `CTAPHID_INIT` reply: nonce, channel, versions, caps.
-fn init_reply(nonce: &[u8], channel: u32) -> [u8; HID_PACKET_LEN] {
+fn init_reply(nonce: &[u8], channel: u32, capabilities: u8) -> [u8; HID_PACKET_LEN] {
     let mut body = Vec::with_capacity(17);
     body.extend_from_slice(nonce);
     body.extend_from_slice(&channel.to_be_bytes());
-    body.extend_from_slice(&[2, 0, 0, 0, 0]);
+    body.extend_from_slice(&[2, 0, 0, 0, capabilities]);
     initial(BROADCAST_CID, CMD_INIT, &body)
+}
+
+/// Reassemble the message whose initial packet is `written[index]`: its
+/// command byte and payload, continuation packets included.
+fn sent_message(written: &[[u8; HID_PACKET_LEN]], index: usize) -> (u8, Vec<u8>) {
+    let first = &written[index];
+    let len = u16::from_be_bytes([first[5], first[6]]) as usize;
+    let mut payload = first[7..].to_vec();
+    let mut next = index + 1;
+    while payload.len() < len {
+        payload.extend_from_slice(&written[next][5..]);
+        next += 1;
+    }
+    payload.truncate(len);
+    (first[4], payload)
 }
 
 fn is_broadcast_init(packet: &[u8; HID_PACKET_LEN]) -> bool {
@@ -88,7 +113,8 @@ impl HidTransport for ScriptedDevice {
     fn write_packet(&mut self, packet: &[u8; HID_PACKET_LEN]) -> Result<(), Error> {
         self.written.push(*packet);
         if is_broadcast_init(packet) {
-            self.replies.push_front(init_reply(&packet[7..15], self.channel));
+            self.replies
+                .push_front(init_reply(&packet[7..15], self.channel, self.capabilities));
         }
         Ok(())
     }
@@ -368,8 +394,9 @@ fn every_command_byte_carries_the_initial_packet_flag() {
 #[test]
 fn the_init_request_goes_out_with_the_flag_set() {
     let mut device = ScriptedDevice::new(0x1234_5678, vec![]);
-    let channel = init_channel(&mut device, &Interaction::default()).unwrap();
+    let (channel, capabilities) = init_channel(&mut device, &Interaction::default()).unwrap();
     assert_eq!(channel, 0x1234_5678);
+    assert_eq!(capabilities, CAPFLAG_CBOR);
     let init = device.written[0];
     assert_eq!(&init[..4], &BROADCAST_CID.to_be_bytes(), "broadcast");
     assert_eq!(init[4], 0x86, "CTAPHID_INIT is 0x86 on the wire");
@@ -636,7 +663,8 @@ impl FakeToken {
 impl HidTransport for FakeToken {
     fn write_packet(&mut self, packet: &[u8; HID_PACKET_LEN]) -> Result<(), Error> {
         if is_broadcast_init(packet) {
-            self.replies.push_back(init_reply(&packet[7..15], self.channel));
+            self.replies
+                .push_back(init_reply(&packet[7..15], self.channel, CAPFLAG_CBOR));
             return Ok(());
         }
         if packet[4] == CMD_CANCEL {
@@ -867,4 +895,114 @@ fn the_simulated_token_really_derives_its_own_secret() {
     let theirs = SharedSecret::derive(Protocol::Two, &z);
     let sent = agreement.secret.encrypt(&[9u8; 16]).unwrap();
     assert_eq!(theirs.decrypt(&sent).unwrap().as_slice(), &[9u8; 16]);
+}
+
+// ---------------------------------------------------------------------------
+// Several tokens, and U2F-only tokens.
+// ---------------------------------------------------------------------------
+
+/// Two tokens plugged in, the credential on the second: the first is
+/// probed silently and skipped, and only the second is asked to sign.
+#[test]
+fn the_token_that_holds_the_credential_is_the_one_asked() {
+    let first = ScriptedDevice::new(1, vec![initial(1, CMD_CBOR, &[CTAP2_ERR_NO_CREDENTIALS])]);
+    let signature = vec![0x44u8; 64];
+    let mut replies = vec![initial(2, CMD_CBOR, &[CTAP2_OK, 0xa0])];
+    replies.extend(packets(2, CMD_CBOR, &assertion_message(0x01, 3, &signature)));
+    let second = ScriptedDevice::new(2, replies);
+
+    let mut devices: Vec<Box<dyn HidTransport>> = vec![Box::new(first), Box::new(second)];
+    let assertion = get_assertion_from(
+        &mut devices,
+        &request(),
+        &Interaction::default(),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_eq!(assertion.signature, signature);
+}
+
+/// The probe is silent: `up: false`, whatever the credential asks.
+#[test]
+fn the_probe_never_asks_for_a_touch() {
+    let mut device = ScriptedDevice::new(1, vec![initial(1, CMD_CBOR, &[CTAP2_OK, 0xa0])]);
+    assert!(holds_credential(&mut device, &request(), &[1, 2, 3, 4], &Interaction::default()).unwrap());
+    let (command, payload) = sent_message(&device.written, 1);
+    assert_eq!(command, CMD_CBOR);
+    assert_eq!(payload[0], CTAP2_GET_ASSERTION);
+    let entries = cbor::decode(&payload[1..]).unwrap().0.into_map().unwrap();
+    let options = entries
+        .into_iter()
+        .find_map(|(k, v)| (k.as_uint() == Some(0x05)).then_some(v))
+        .unwrap()
+        .into_map()
+        .unwrap();
+    assert_eq!(options, vec![(Value::Text("up".into()), Value::Bool(false))]);
+}
+
+#[test]
+fn no_token_holding_the_credential_is_a_named_error() {
+    let mut devices: Vec<Box<dyn HidTransport>> = vec![
+        Box::new(ScriptedDevice::new(1, vec![initial(1, CMD_CBOR, &[CTAP2_ERR_NO_CREDENTIALS])])),
+        Box::new(ScriptedDevice::new(2, vec![initial(2, CMD_CBOR, &[CTAP2_ERR_NO_CREDENTIALS])])),
+    ];
+    let err = get_assertion_from(&mut devices, &request(), &Interaction::default(), Duration::from_secs(5))
+        .unwrap_err();
+    assert!(matches!(err, Error::CredentialNotFound), "got {err:?}");
+}
+
+/// A U2F-only token (no `CAPFLAG_CBOR`) signs through a U2F APDU: it
+/// answers "waiting for presence" until touched, then the signature.
+#[test]
+fn a_u2f_only_token_signs_through_ctap1() {
+    let mut success = vec![0x01];
+    success.extend_from_slice(&7u32.to_be_bytes());
+    success.extend_from_slice(&[0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
+    success.extend_from_slice(&[0x90, 0x00]);
+    let mut device = ScriptedDevice::u2f_only(
+        5,
+        vec![initial(5, CMD_MSG, &[0x69, 0x85]), initial(5, CMD_MSG, &success)],
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&events);
+    let interaction = Interaction {
+        events: Some(Arc::new(move |event| seen.lock().unwrap().push(event))),
+        ..Interaction::default()
+    };
+    let assertion =
+        get_assertion(&mut device, &request(), &interaction, Duration::from_secs(5)).unwrap();
+    assert_eq!(assertion.flags, 0x01);
+    assert_eq!(assertion.counter, 7);
+    assert_eq!(assertion.signature, vec![0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
+    assert_eq!(*events.lock().unwrap(), vec![TokenEvent::TouchNeeded]);
+
+    // The APDU: AUTHENTICATE with presence enforced, extended length,
+    // challenge = SHA-256(message), application = SHA-256("ssh:").
+    let (command, apdu) = sent_message(&device.written, 1);
+    assert_eq!(command, CMD_MSG);
+    assert_eq!(apdu.len(), 7 + 69 + 2);
+    assert_eq!(&apdu[..4], &[0x00, U2F_INS_AUTHENTICATE, U2F_ENFORCE_PRESENCE, 0x00]);
+    assert_eq!(&apdu[4..7], &[0x00, 0x00, 69]);
+    let hash: [u8; 32] = Sha256::digest(request().message).into();
+    assert_eq!(&apdu[7..39], &hash);
+    let app: [u8; 32] = Sha256::digest(b"ssh:").into();
+    assert_eq!(&apdu[39..71], &app);
+    assert_eq!(apdu[71], 4);
+    assert_eq!(&apdu[72..76], &[1, 2, 3, 4]);
+    assert_eq!(&apdu[76..], &[0x00, 0x00], "Le");
+}
+
+#[test]
+fn a_u2f_only_token_cannot_verify_the_user() {
+    let mut device = ScriptedDevice::u2f_only(5, vec![]);
+    let err = get_assertion(&mut device, &uv_request(), &Interaction::default(), Duration::from_secs(5))
+        .unwrap_err();
+    assert!(matches!(err, Error::UnsupportedByToken(_)), "got {err:?}");
+}
+
+#[test]
+fn a_u2f_token_that_did_not_issue_the_handle_says_so() {
+    let mut device = ScriptedDevice::u2f_only(5, vec![initial(5, CMD_MSG, &[0x6a, 0x80])]);
+    let err = run(&mut device, &request()).unwrap_err();
+    assert!(matches!(err, Error::CredentialNotFound), "got {err:?}");
 }
