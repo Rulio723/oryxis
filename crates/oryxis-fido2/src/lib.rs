@@ -1,5 +1,9 @@
 //! Asking a FIDO2 token for an assertion.
 //!
+//! USB everywhere; NFC and Bluetooth tokens only through Windows Hello,
+//! which reaches them itself. Linux NFC would go through PC/SC (`pcscd`),
+//! a service and a C library this crate does not take on.
+//!
 //! The SSH side (`oryxis-ssh::sk`) knows what an `sk-ssh-ed25519` key file
 //! holds and what OpenSSH expects on the wire. This crate knows the other
 //! half: how to reach a token on this machine and run
@@ -11,8 +15,8 @@
 //! - [`ctap`] is CTAPHID framing plus the one CTAP2 command we send, and
 //!   the sliver of CBOR it needs. Platform-neutral: it talks to a
 //!   [`ctap::HidTransport`].
-//! - `hid_windows` / `hid_linux` are that transport over the OS's HID
-//!   device interface.
+//! - `hid_windows` / `hid_linux` / `hid_macos` are that transport over the
+//!   OS's HID device interface.
 //! - `webauthn_windows` is Windows Hello, the only way an ordinary
 //!   (non-elevated) Windows process may reach a token at all.
 //!
@@ -28,6 +32,8 @@ mod pin;
 
 #[cfg(target_os = "linux")]
 mod hid_linux;
+#[cfg(target_os = "macos")]
+mod hid_macos;
 #[cfg(windows)]
 mod hid_windows;
 #[cfg(windows)]

@@ -6,8 +6,8 @@ edition = "2024"
 # The FIDO2 token transport and nothing SSH: CTAPHID framing, the CTAP2
 # `authenticatorGetAssertion` exchange with its PIN protocol, and the
 # per-platform ways of reaching a token (Windows Hello, raw HID on
-# Windows and Linux). `oryxis-ssh` owns what the signature MEANS; this
-# crate only owns how to ask a token for one.
+# Windows, Linux and macOS). `oryxis-ssh` owns what the signature MEANS;
+# this crate only owns how to ask a token for one.
 
 [dependencies]
 thiserror = { workspace = true }
@@ -44,7 +44,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# IOKit HID + the CoreFoundation run loop it reports through. Both are
+# already in the lock (serial ports, the windowing stack).
+core-foundation-sys = "0.8"
+io-kit-sys = "0.4"
+
 [target.'cfg(target_os = "linux")'.dependencies]
-# `/dev/hidraw*`: poll(2) for a bounded read, and the HIDIOCGRDESC ioctl
-# pair that reads the report descriptor. Already in the lock.
+# `/dev/hidraw*`: open / poll(2) / read / write. The report descriptor is
+# read from sysfs, so no ioctl is needed. Already in the lock.
 libc = "0.2"

@@ -108,7 +108,7 @@ pub trait Authenticator: Send + Sync {
 /// The UI reads this to decide whether to offer native signing, so it
 /// must be exactly the set [`platform_authenticator`] can serve.
 pub const fn platform_supported() -> bool {
-    cfg!(any(windows, target_os = "linux"))
+    cfg!(any(windows, target_os = "linux", target_os = "macos"))
 }
 
 /// The authenticator for the running platform.
@@ -117,7 +117,7 @@ pub const fn platform_supported() -> bool {
 /// since Windows 10 1903 only an elevated process may open a FIDO HID
 /// interface. An elevated one drives HID directly, which also avoids the
 /// Windows Security picker; a Windows without `webauthn.dll` falls back to
-/// HID too. Linux reads `/dev/hidraw*`.
+/// HID too. Linux reads `/dev/hidraw*`, macOS goes through IOKit.
 pub fn platform_authenticator() -> Arc<dyn Authenticator> {
     #[cfg(windows)]
     {
@@ -143,7 +143,11 @@ pub fn platform_authenticator() -> Arc<dyn Authenticator> {
     {
         Arc::new(crate::hid_linux::LinuxHidAuthenticator)
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(crate::hid_macos::MacHidAuthenticator)
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         Arc::new(Unsupported)
     }
@@ -182,13 +186,13 @@ fn process_is_elevated() -> std::io::Result<bool> {
     }
 }
 
-/// Every platform without a transport (macOS today: IOKit HID is where a
-/// third one would go). Names the platform instead of "not found", so the
-/// failure reads as a missing feature rather than a missing key.
-#[cfg(not(any(windows, target_os = "linux")))]
+/// Every platform without a transport (the BSDs today). Names the platform
+/// instead of "not found", so the failure reads as a missing feature rather
+/// than a missing key.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 struct Unsupported;
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 impl Authenticator for Unsupported {
     fn get_assertion(&self, _: &AssertionRequest, _: &Interaction) -> Result<Assertion, Error> {
         Err(Error::Unsupported(std::env::consts::OS))

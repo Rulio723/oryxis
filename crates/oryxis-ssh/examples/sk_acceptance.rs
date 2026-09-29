@@ -8,7 +8,7 @@
 //!
 //! On Windows an ordinary process goes through Windows Hello and an
 //! elevated one through direct USB HID, so running it both ways checks
-//! both transports. On Linux it reads `/dev/hidraw*`.
+//! both transports. On Linux it reads `/dev/hidraw*`, on macOS IOKit.
 //!
 //! ```text
 //! cargo run -p oryxis-ssh --example sk_acceptance -- ~/.ssh/id_ed25519_sk

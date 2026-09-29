@@ -2340,7 +2340,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "Неправильний PIN. До блокування ключа залишилося спроб: {n}.",
         "sk_touch_notice" => "Торкніться ключа безпеки, щоб продовжити",
         "sk_verify_notice" => "Підтвердьте на ключі безпеки (PIN або відбиток), щоб продовжити",
-        "security_key_unsupported_platform" => "Ця платформа поки не вміє підписувати ключем безпеки (Windows і Linux уміють). Використайте метод «Агент» з ssh-agent, у якому є цей ключ.",
+        "security_key_unsupported_platform" => "Ця платформа поки не вміє підписувати ключем безпеки (Windows, macOS і Linux уміють). Використайте метод «Агент» з ssh-agent, у якому є цей ключ.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Імпортувати відкритий ключ",
         "key_badge_security_key" => "Ключ безпеки",

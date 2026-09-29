@@ -2345,7 +2345,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "Nesprávný PIN. Do zablokování klíče zbývá pokusů: {n}.",
         "sk_touch_notice" => "Pokračujte dotykem bezpečnostního klíče",
         "sk_verify_notice" => "Pokračujte ověřením na bezpečnostním klíči (PIN nebo otisk prstu)",
-        "security_key_unsupported_platform" => "Tato platforma zatím neumí podepisovat bezpečnostním klíčem (Windows a Linux ano). Použijte metodu Agent s ssh-agentem, který klíč drží.",
+        "security_key_unsupported_platform" => "Tato platforma zatím neumí podepisovat bezpečnostním klíčem (Windows, macOS a Linux ano). Použijte metodu Agent s ssh-agentem, který klíč drží.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importovat veřejný klíč",
         "key_badge_security_key" => "Bezpečnostní klíč",

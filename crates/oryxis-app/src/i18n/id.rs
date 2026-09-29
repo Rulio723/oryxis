@@ -2341,7 +2341,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "PIN salah. Tersisa {n} percobaan sebelum kunci terkunci.",
         "sk_touch_notice" => "Sentuh kunci keamanan Anda untuk melanjutkan",
         "sk_verify_notice" => "Verifikasi di kunci keamanan Anda (PIN atau sidik jari) untuk melanjutkan",
-        "security_key_unsupported_platform" => "Platform ini belum bisa menandatangani dengan kunci keamanan (Windows dan Linux bisa). Gunakan metode Agent dengan ssh-agent yang menyimpan kunci tersebut.",
+        "security_key_unsupported_platform" => "Platform ini belum bisa menandatangani dengan kunci keamanan (Windows, macOS dan Linux bisa). Gunakan metode Agent dengan ssh-agent yang menyimpan kunci tersebut.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Impor kunci publik",
         "key_badge_security_key" => "Kunci keamanan",

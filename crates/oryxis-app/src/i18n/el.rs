@@ -2345,7 +2345,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "Λάθος PIN. Απομένουν {n} προσπάθειες πριν κλειδώσει το κλειδί.",
         "sk_touch_notice" => "Αγγίξτε το κλειδί ασφαλείας για να συνεχίσετε",
         "sk_verify_notice" => "Επαληθεύστε στο κλειδί ασφαλείας (PIN ή δακτυλικό αποτύπωμα) για να συνεχίσετε",
-        "security_key_unsupported_platform" => "Αυτή η πλατφόρμα δεν μπορεί ακόμη να υπογράφει με κλειδί ασφαλείας (τα Windows και το Linux μπορούν). Χρησιμοποιήστε τη μέθοδο Agent με ένα ssh-agent που κρατά το κλειδί.",
+        "security_key_unsupported_platform" => "Αυτή η πλατφόρμα δεν μπορεί ακόμη να υπογράφει με κλειδί ασφαλείας (τα Windows, macOS και το Linux μπορούν). Χρησιμοποιήστε τη μέθοδο Agent με ένα ssh-agent που κρατά το κλειδί.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Εισαγωγή δημόσιου κλειδιού",
         "key_badge_security_key" => "Κλειδί ασφαλείας",

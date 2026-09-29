@@ -2340,7 +2340,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "Yanlış PIN. Anahtar kilitlenmeden önce {n} deneme hakkı kaldı.",
         "sk_touch_notice" => "Devam etmek için güvenlik anahtarınıza dokunun",
         "sk_verify_notice" => "Devam etmek için güvenlik anahtarınızda doğrulayın (PIN veya parmak izi)",
-        "security_key_unsupported_platform" => "Bu platform henüz güvenlik anahtarıyla imzalayamıyor (Windows ve Linux imzalayabiliyor). Anahtarı tutan bir ssh-agent ile Agent yöntemini kullanın.",
+        "security_key_unsupported_platform" => "Bu platform henüz güvenlik anahtarıyla imzalayamıyor (Windows, macOS ve Linux imzalayabiliyor). Anahtarı tutan bir ssh-agent ile Agent yöntemini kullanın.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Genel anahtarı içe aktar",
         "key_badge_security_key" => "Güvenlik anahtarı",

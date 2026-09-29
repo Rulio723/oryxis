@@ -2341,7 +2341,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "PIN이 틀렸습니다. 키가 잠기기 전까지 {n}번 남았습니다.",
         "sk_touch_notice" => "계속하려면 보안 키를 터치하세요",
         "sk_verify_notice" => "계속하려면 보안 키에서 확인하세요(PIN 또는 지문)",
-        "security_key_unsupported_platform" => "이 플랫폼에서는 아직 보안 키로 서명할 수 없습니다(Windows와 Linux는 가능). 키를 가진 ssh-agent와 함께 에이전트 방식을 사용하세요.",
+        "security_key_unsupported_platform" => "이 플랫폼에서는 아직 보안 키로 서명할 수 없습니다(Windows, macOS와 Linux는 가능). 키를 가진 ssh-agent와 함께 에이전트 방식을 사용하세요.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "공개 키 가져오기",
         "key_badge_security_key" => "보안 키",

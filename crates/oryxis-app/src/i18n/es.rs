@@ -2308,7 +2308,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "PIN incorrecto. Quedan {n} intentos antes de que la clave se bloquee.",
         "sk_touch_notice" => "Toque su clave de seguridad para continuar",
         "sk_verify_notice" => "Verifique en su clave de seguridad (PIN o huella) para continuar",
-        "security_key_unsupported_platform" => "Esta plataforma todavía no puede firmar con una clave de seguridad (Windows y Linux sí). Use el método Agente con un ssh-agent que tenga la clave.",
+        "security_key_unsupported_platform" => "Esta plataforma todavía no puede firmar con una clave de seguridad (Windows, macOS y Linux sí). Use el método Agente con un ssh-agent que tenga la clave.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importar clave pública",
         "key_badge_security_key" => "Clave de seguridad",

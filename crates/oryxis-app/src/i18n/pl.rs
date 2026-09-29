@@ -2340,7 +2340,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "Błędny PIN. Pozostało prób przed zablokowaniem klucza: {n}.",
         "sk_touch_notice" => "Dotknij klucza bezpieczeństwa, aby kontynuować",
         "sk_verify_notice" => "Potwierdź na kluczu bezpieczeństwa (PIN lub odcisk palca), aby kontynuować",
-        "security_key_unsupported_platform" => "Ta platforma nie potrafi jeszcze podpisywać kluczem bezpieczeństwa (Windows i Linux potrafią). Użyj metody Agent z ssh-agent, który przechowuje klucz.",
+        "security_key_unsupported_platform" => "Ta platforma nie potrafi jeszcze podpisywać kluczem bezpieczeństwa (Windows, macOS i Linux potrafią). Użyj metody Agent z ssh-agent, który przechowuje klucz.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importuj klucz publiczny",
         "key_badge_security_key" => "Klucz bezpieczeństwa",

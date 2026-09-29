@@ -2346,7 +2346,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "गलत PIN। कुंजी लॉक होने से पहले {n} प्रयास बचे हैं।",
         "sk_touch_notice" => "जारी रखने के लिए अपनी सुरक्षा कुंजी को छुएँ",
         "sk_verify_notice" => "जारी रखने के लिए अपनी सुरक्षा कुंजी पर सत्यापित करें (PIN या फ़िंगरप्रिंट)",
-        "security_key_unsupported_platform" => "यह प्लेटफ़ॉर्म अभी सुरक्षा कुंजी से हस्ताक्षर नहीं कर सकता (Windows और Linux कर सकते हैं)। कुंजी रखने वाले ssh-agent के साथ एजेंट विधि का उपयोग करें।",
+        "security_key_unsupported_platform" => "यह प्लेटफ़ॉर्म अभी सुरक्षा कुंजी से हस्ताक्षर नहीं कर सकता (Windows, macOS और Linux कर सकते हैं)। कुंजी रखने वाले ssh-agent के साथ एजेंट विधि का उपयोग करें।",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "सार्वजनिक कुंजी इंपोर्ट करें",
         "key_badge_security_key" => "सुरक्षा कुंजी",

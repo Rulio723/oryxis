@@ -2346,7 +2346,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "PIN שגוי. נותרו {n} ניסיונות לפני שהמפתח יינעל.",
         "sk_touch_notice" => "יש לגעת במפתח האבטחה כדי להמשיך",
         "sk_verify_notice" => "יש לאמת במפתח האבטחה (PIN או טביעת אצבע) כדי להמשיך",
-        "security_key_unsupported_platform" => "פלטפורמה זו עדיין לא יכולה לחתום עם מפתח אבטחה (Windows ו-Linux יכולות). יש להשתמש בשיטת סוכן (Agent) עם ssh-agent שמחזיק את המפתח.",
+        "security_key_unsupported_platform" => "פלטפורמה זו עדיין לא יכולה לחתום עם מפתח אבטחה (Windows, macOS ו-Linux יכולות). יש להשתמש בשיטת סוכן (Agent) עם ssh-agent שמחזיק את המפתח.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "ייבוא מפתח ציבורי",
         "key_badge_security_key" => "מפתח אבטחה",

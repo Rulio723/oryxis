@@ -2309,7 +2309,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "PIN incorreto. Restam {n} tentativas antes de a chave bloquear.",
         "sk_touch_notice" => "Toque na sua chave de segurança para continuar",
         "sk_verify_notice" => "Confirme na sua chave de segurança (PIN ou digital) para continuar",
-        "security_key_unsupported_platform" => "Esta plataforma ainda não assina com chave de segurança (Windows e Linux sim). Use o método Agente com um ssh-agent que tenha a chave.",
+        "security_key_unsupported_platform" => "Esta plataforma ainda não assina com chave de segurança (Windows, macOS e Linux sim). Use o método Agente com um ssh-agent que tenha a chave.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importar chave pública",
         "key_badge_security_key" => "Chave de segurança",

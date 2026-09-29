@@ -259,6 +259,13 @@ impl Oryxis {
                             .with_host_key_ask(hk_ask_tx)
                             .with_proxy_command_ask(pc_ask_tx)
                             .with_totp_secret(totp_secret.as_deref())
+                            // The user asked for this mount: a touch may be
+                            // asked for. There is no prompt surface here, so
+                            // a PIN only works where the OS dialog collects
+                            // it (Windows Hello).
+                            .with_security_key_prompts(
+                                crate::connect_methods::security_key_prompts(None),
+                            )
                             .with_keepalive(keepalive)
                             .with_address_family(conn.address_family)
                             .with_rekey_limit_mb(conn.rekey_limit_mb)

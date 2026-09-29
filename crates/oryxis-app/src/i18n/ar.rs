@@ -2327,7 +2327,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "رمز PIN غير صحيح. تبقى {n} محاولات قبل قفل المفتاح.",
         "sk_touch_notice" => "المس مفتاح الأمان للمتابعة",
         "sk_verify_notice" => "تحقق على مفتاح الأمان (رمز PIN أو البصمة) للمتابعة",
-        "security_key_unsupported_platform" => "لا يمكن لهذه المنصة التوقيع بمفتاح أمان بعد (يمكن ذلك على Windows وLinux). استخدم طريقة Agent مع ssh-agent يحتفظ بالمفتاح.",
+        "security_key_unsupported_platform" => "لا يمكن لهذه المنصة التوقيع بمفتاح أمان بعد (يمكن ذلك على Windows، macOS وLinux). استخدم طريقة Agent مع ssh-agent يحتفظ بالمفتاح.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "استيراد المفتاح العام",
         "key_badge_security_key" => "مفتاح أمان",

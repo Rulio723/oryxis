@@ -2308,7 +2308,7 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "sk_pin_retry" => "PIN 错误。密钥锁定前还剩 {n} 次尝试。",
         "sk_touch_notice" => "请触摸安全密钥以继续",
         "sk_verify_notice" => "请在安全密钥上验证（PIN 或指纹）以继续",
-        "security_key_unsupported_platform" => "此平台暂不支持用安全密钥签名（Windows 和 Linux 支持）。请使用“代理”方式，并由持有该密钥的 ssh-agent 签名。",
+        "security_key_unsupported_platform" => "此平台暂不支持用安全密钥签名（Windows、macOS 和 Linux 支持）。请使用“代理”方式，并由持有该密钥的 ssh-agent 签名。",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "导入公钥",
         "key_badge_security_key" => "安全密钥",

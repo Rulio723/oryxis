@@ -21,7 +21,9 @@ coming next, see the [Roadmap](../README.md#roadmap).
   `~/.ssh`) and Oryxis asks the token itself, touch prompt and PIN
   included. The **Security Key** auth method offers that token and
   nothing else. Windows signs through Windows Hello, so no administrator
-  rights are needed; Linux talks to the token over `hidraw`. Background
+  rights are needed (and NFC or Bluetooth tokens work through the same
+  dialog); Linux talks to USB tokens over `hidraw`, macOS through IOKit.
+  Background
   connections (the MCP server, boot-time forwards, the monitor) never
   raise a touch prompt nobody asked for.
 - **Full SSH pipeline.** Direct, SOCKS4/5, HTTP CONNECT, ProxyCommand,
