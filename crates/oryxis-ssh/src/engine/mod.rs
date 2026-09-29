@@ -809,6 +809,78 @@ mod tests {
         let interaction = attended.security_key_interaction().unwrap();
         assert!(interaction.pin.is_some(), "the PIN rides the kbi bridge");
         assert!(interaction.events.is_none());
+
+        // A bastion dialled on the way is the same person's dial: its hop
+        // engine keeps the permission, or a security-key bastion would be
+        // refused as "unattended" on a tab the user is looking at.
+        let hop = oryxis_core::models::connection::Connection::new("bastion", "b.example");
+        assert!(attended.for_hop(&hop, None).security_key_prompts.is_some());
+    }
+
+    /// The PIN crosses from the token's blocking thread to the dial's
+    /// keyboard-interactive bridge and back. `blocking_send` /
+    /// `blocking_recv` are only legal off the async workers, which is
+    /// where `spawn_blocking` runs the token, so this pins that boundary
+    /// the way a `verify-required` key would cross it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_pin_reaches_the_token_through_the_kbi_bridge() {
+        use russh::Signer as _;
+        use std::sync::{Arc, Mutex};
+
+        struct AsksForPin(Arc<Mutex<Option<String>>>);
+        impl oryxis_fido2::Authenticator for AsksForPin {
+            fn get_assertion(
+                &self,
+                _: &oryxis_fido2::AssertionRequest,
+                interaction: &oryxis_fido2::Interaction,
+            ) -> Result<oryxis_fido2::Assertion, oryxis_fido2::Error> {
+                let pin = (interaction.pin.as_ref().unwrap())(oryxis_fido2::PinPrompt {
+                    retries: Some(8),
+                    retry: false,
+                })
+                .ok_or(oryxis_fido2::Error::Cancelled)?;
+                *self.0.lock().unwrap() = Some(pin.to_string());
+                Ok(oryxis_fido2::Assertion {
+                    signature: vec![0; 64],
+                    flags: 0x05,
+                    counter: 1,
+                })
+            }
+        }
+
+        let (kbi_tx, mut kbi_rx) = tokio::sync::mpsc::channel::<(
+            KbiQuery,
+            tokio::sync::oneshot::Sender<Option<Vec<String>>>,
+        )>(1);
+        let engine = SshEngine::new()
+            .with_kbi_ask(kbi_tx)
+            .with_security_key_prompts(crate::sk::SecurityKeyPrompts {
+                pin_title: "Security key PIN".into(),
+                pin_label: "PIN".into(),
+                pin_retry: "{n}".into(),
+                notices: None,
+            });
+        let answered = tokio::spawn(async move {
+            let (query, reply) = kbi_rx.recv().await.expect("the PIN was asked for");
+            assert_eq!(query.name, "Security key PIN");
+            assert_eq!(query.prompts.len(), 1);
+            assert!(!query.prompts[0].echo, "a PIN is never echoed");
+            reply.send(Some(vec!["123456".into()])).unwrap();
+        });
+
+        let text = crate::sk::credential::fixture::sk_private_key(
+            crate::sk::credential::fixture::FIXTURE_PUBLIC,
+            crate::sk::credential::FLAG_USER_VERIFICATION_REQUIRED,
+            &crate::sk::credential::fixture::FIXTURE_HANDLE,
+        );
+        let credential = crate::sk::SkCredential::from_openssh_private(&text).unwrap();
+        let seen = Arc::new(Mutex::new(None));
+        let mut signer = crate::sk::SkSigner::new(credential.clone(), Arc::new(AsksForPin(seen.clone())))
+            .with_interaction(engine.security_key_interaction().unwrap());
+        let identity = russh::keys::agent::AgentIdentity::from(credential.public_key().clone());
+        signer.auth_sign(&identity, None, b"x".to_vec()).await.unwrap();
+        answered.await.unwrap();
+        assert_eq!(seen.lock().unwrap().as_deref(), Some("123456"));
     }
 
     /// The spawn gate, from both sides.
