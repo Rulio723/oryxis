@@ -6,6 +6,10 @@ project uses [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Security keys sign natively, no ssh-agent: Ed25519-SK and ECDSA-SK on Windows, Linux and macOS, with PIN, and a hardware-only Security Key method (#236, #237, by @Rulio723).
+- The MCP plugin 0.1.6 reads hosts set to Security Key, and refuses them: a touch needs a person at the keyboard.
+
 ### Changed
 - A command proxy line runs as `exec <line>`, the way OpenSSH runs it, and stopping a dial ends the proxy together with anything it started.
 
