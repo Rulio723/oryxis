@@ -170,7 +170,10 @@ impl Oryxis {
                 {
                     if let Some(ref mut progress) = self.connecting {
                         progress.failed = true;
-                        progress.logs.push((progress.step, format!("Error: {}", err)));
+                        progress.logs.push((
+                            progress.step,
+                            crate::i18n::t_fill("ssh_progress_error", &[("error", &err)]),
+                        ));
                         // The connect is dead, so a KBI modal parked on it is an
                         // orphan: its oneshot is gone (submits would vanish
                         // silently) and the progress card's KBI branch renders

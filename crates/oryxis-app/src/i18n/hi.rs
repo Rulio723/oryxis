@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "EC2 Instance Connect से {instance} को अस्थायी सार्वजनिक कुंजी भेजी जा रही है…",
         "ssh_progress_instance_connect_failed" => "EC2 Instance Connect से भेजना विफल: {error}",
         "ssh_progress_pane_connecting" => "{label} ({host}:{port}) से कनेक्ट हो रहा है...",
+        "ssh_progress_error" => "त्रुटि: {error}",
+        "ssh_progress_method_auto" => "स्वचालित पहचान",
+        "ssh_progress_method_password" => "पासवर्ड",
+        "ssh_progress_method_password_prompt" => "पूछे गए पासवर्ड",
+        "ssh_progress_method_key" => "सार्वजनिक कुंजी",
+        "ssh_progress_method_agent" => "SSH एजेंट",
+        "ssh_progress_method_interactive" => "कीबोर्ड-इंटरैक्टिव",
+        "ssh_progress_method_certificate" => "प्रमाणपत्र",
+        "ssh_progress_method_security_key" => "हार्डवेयर सुरक्षा कुंजी",
 
         // Navigation
         "expand" => "विस्तृत करें",

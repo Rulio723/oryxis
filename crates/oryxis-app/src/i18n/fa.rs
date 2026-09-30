@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "در حال ارسال کلید عمومی موقت به {instance} از طریق EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "ارسال از طریق EC2 Instance Connect ناموفق بود: {error}",
         "ssh_progress_pane_connecting" => "در حال اتصال به {label} ({host}:{port})...",
+        "ssh_progress_error" => "خطا: {error}",
+        "ssh_progress_method_auto" => "تشخیص خودکار",
+        "ssh_progress_method_password" => "گذرواژه",
+        "ssh_progress_method_password_prompt" => "گذرواژه‌ای که هنگام اتصال پرسیده می‌شود",
+        "ssh_progress_method_key" => "کلید عمومی",
+        "ssh_progress_method_agent" => "عامل SSH",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "گواهی",
+        "ssh_progress_method_security_key" => "کلید امنیتی سخت‌افزاری",
 
         // Navigation
         "expand" => "گسترش",

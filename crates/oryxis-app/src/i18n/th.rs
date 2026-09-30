@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "กำลังส่งคีย์สาธารณะชั่วคราวไปยัง {instance} ผ่าน EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "ส่งผ่าน EC2 Instance Connect ไม่สำเร็จ: {error}",
         "ssh_progress_pane_connecting" => "กำลังเชื่อมต่อไปยัง {label} ({host}:{port})...",
+        "ssh_progress_error" => "ข้อผิดพลาด: {error}",
+        "ssh_progress_method_auto" => "การตรวจหาอัตโนมัติ",
+        "ssh_progress_method_password" => "รหัสผ่าน",
+        "ssh_progress_method_password_prompt" => "รหัสผ่านที่ถามเมื่อเชื่อมต่อ",
+        "ssh_progress_method_key" => "กุญแจสาธารณะ",
+        "ssh_progress_method_agent" => "SSH agent",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "ใบรับรอง",
+        "ssh_progress_method_security_key" => "กุญแจความปลอดภัยแบบฮาร์ดแวร์",
 
         // Navigation
         "expand" => "ขยาย",

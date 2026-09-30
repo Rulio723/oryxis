@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "جارٍ إرسال مفتاح عام مؤقت إلى {instance} عبر EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "فشل الإرسال عبر EC2 Instance Connect: {error}",
         "ssh_progress_pane_connecting" => "جارٍ الاتصال بـ {label} ({host}:{port})...",
+        "ssh_progress_error" => "خطأ: {error}",
+        "ssh_progress_method_auto" => "الاكتشاف التلقائي",
+        "ssh_progress_method_password" => "كلمة المرور",
+        "ssh_progress_method_password_prompt" => "كلمة مرور تُطلب عند الاتصال",
+        "ssh_progress_method_key" => "المفتاح العام",
+        "ssh_progress_method_agent" => "وكيل SSH",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "الشهادة",
+        "ssh_progress_method_security_key" => "مفتاح الأمان المادي",
 
         // Navigation
         "expand" => "توسيع",

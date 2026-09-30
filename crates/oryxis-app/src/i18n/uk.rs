@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "Надсилання тимчасового відкритого ключа до {instance} через EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "Помилка надсилання через EC2 Instance Connect: {error}",
         "ssh_progress_pane_connecting" => "Підключення до {label} ({host}:{port})...",
+        "ssh_progress_error" => "Помилка: {error}",
+        "ssh_progress_method_auto" => "автовизначення",
+        "ssh_progress_method_password" => "пароля",
+        "ssh_progress_method_password_prompt" => "пароля із запитом",
+        "ssh_progress_method_key" => "відкритого ключа",
+        "ssh_progress_method_agent" => "SSH-агента",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "сертифіката",
+        "ssh_progress_method_security_key" => "апаратного ключа безпеки",
 
         // Navigation
         "expand" => "Розгорнути",

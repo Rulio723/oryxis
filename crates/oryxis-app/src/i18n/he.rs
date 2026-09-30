@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "שולח מפתח ציבורי זמני אל {instance} באמצעות EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "השליחה באמצעות EC2 Instance Connect נכשלה: {error}",
         "ssh_progress_pane_connecting" => "מתחבר אל {label} ({host}:{port})...",
+        "ssh_progress_error" => "שגיאה: {error}",
+        "ssh_progress_method_auto" => "זיהוי אוטומטי",
+        "ssh_progress_method_password" => "סיסמה",
+        "ssh_progress_method_password_prompt" => "סיסמה שנשאלת בעת החיבור",
+        "ssh_progress_method_key" => "מפתח ציבורי",
+        "ssh_progress_method_agent" => "סוכן SSH",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "אישור",
+        "ssh_progress_method_security_key" => "מפתח אבטחה חומרתי",
 
         // Navigation
         "expand" => "הרחבה",

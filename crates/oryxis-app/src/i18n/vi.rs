@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "Đang gửi khóa công khai tạm thời đến {instance} qua EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "Gửi qua EC2 Instance Connect thất bại: {error}",
         "ssh_progress_pane_connecting" => "Đang kết nối đến {label} ({host}:{port})...",
+        "ssh_progress_error" => "Lỗi: {error}",
+        "ssh_progress_method_auto" => "tự động phát hiện",
+        "ssh_progress_method_password" => "mật khẩu",
+        "ssh_progress_method_password_prompt" => "mật khẩu được hỏi khi kết nối",
+        "ssh_progress_method_key" => "khóa công khai",
+        "ssh_progress_method_agent" => "SSH agent",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "chứng chỉ",
+        "ssh_progress_method_security_key" => "khóa bảo mật phần cứng",
 
         // Navigation
         "expand" => "Mở rộng",

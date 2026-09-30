@@ -119,10 +119,7 @@ impl Oryxis {
         // Same seed line the split-pane connect writes: the pane exists
         // before the dial answers, and an empty black rectangle is the
         // one thing that reads as a crash.
-        term.process(
-            format!("Connecting to {} ({}:{})...\r\n", conn.label, conn.hostname, conn.port)
-                .as_bytes(),
-        );
+        term.process(crate::dispatch_ssh::pane_connecting_line(&conn).as_bytes());
         let Some(pane_id) = self.make_split_pane(
             tab_idx,
             target,

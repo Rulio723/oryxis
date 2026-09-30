@@ -331,6 +331,36 @@ pub fn t(key: &str) -> &'static str {
     translate(key, lang)
 }
 
+/// Fill a translated template's `{name}` placeholders in ONE pass, so a
+/// substituted value (a username, a raw server diagnostic) that happens
+/// to contain `{user}` is kept verbatim instead of being expanded by the
+/// next replacement, and a translation may reorder its parameters. An
+/// unknown placeholder is left as written.
+/// Usage: `t_fill("ssh_progress_authenticated", &[("user", &name)])`.
+pub fn t_fill(key: &str, values: &[(&str, &str)]) -> String {
+    fill(t(key), values)
+}
+
+pub(crate) fn fill(mut template: &str, values: &[(&str, &str)]) -> String {
+    let mut result = String::with_capacity(template.len());
+    while let Some(start) = template.find('{') {
+        result.push_str(&template[..start]);
+        template = &template[start..];
+        let Some(end) = template.find('}') else {
+            break;
+        };
+        let name = &template[1..end];
+        let replacement = values
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map_or(&template[..=end], |(_, value)| *value);
+        result.push_str(replacement);
+        template = &template[end + 1..];
+    }
+    result.push_str(template);
+    result
+}
+
 /// English lookup, independent of the active-language global. Used by
 /// coverage tests that assert a key resolves (English is the table that
 /// always returns a value, `"???"` for an unknown key) and by the
@@ -467,6 +497,15 @@ mod tests {
             "ssh_progress_instance_connect",
             "ssh_progress_instance_connect_failed",
             "ssh_progress_pane_connecting",
+            "ssh_progress_error",
+            "ssh_progress_method_auto",
+            "ssh_progress_method_password",
+            "ssh_progress_method_password_prompt",
+            "ssh_progress_method_key",
+            "ssh_progress_method_agent",
+            "ssh_progress_method_interactive",
+            "ssh_progress_method_certificate",
+            "ssh_progress_method_security_key",
         ];
         fn placeholders(text: &str) -> std::collections::BTreeSet<&str> {
             text.split('{')
@@ -485,6 +524,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn fill_reorders_parameters_without_rewriting_substituted_text() {
+        assert_eq!(
+            fill("{method}: {user}", &[("user", "name{method}"), ("method", "密钥")]),
+            "密钥: name{method}",
+        );
+        assert_eq!(
+            fill("{user}: {error}", &[("user", "root"), ("error", "拒绝 {user}: 🔑")]),
+            "root: 拒绝 {user}: 🔑",
+        );
+        assert_eq!(fill("{unknown} {", &[("user", "x")]), "{unknown} {");
     }
 
     /// Every supported code resolves to itself, regardless of case or

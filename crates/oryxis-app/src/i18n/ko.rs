@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "EC2 Instance Connect를 통해 {instance}에 임시 공개 키를 전송하는 중…",
         "ssh_progress_instance_connect_failed" => "EC2 Instance Connect 전송에 실패했습니다: {error}",
         "ssh_progress_pane_connecting" => "{label} ({host}:{port})에 연결 중...",
+        "ssh_progress_error" => "오류: {error}",
+        "ssh_progress_method_auto" => "자동 감지",
+        "ssh_progress_method_password" => "비밀번호",
+        "ssh_progress_method_password_prompt" => "입력 요청 비밀번호",
+        "ssh_progress_method_key" => "공개 키",
+        "ssh_progress_method_agent" => "SSH 에이전트",
+        "ssh_progress_method_interactive" => "키보드 대화형 인증",
+        "ssh_progress_method_certificate" => "인증서",
+        "ssh_progress_method_security_key" => "하드웨어 보안 키",
 
         // Navigation
         "expand" => "펼치기",

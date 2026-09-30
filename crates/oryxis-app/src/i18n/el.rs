@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "Αποστολή προσωρινού δημόσιου κλειδιού στο {instance} μέσω EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "Αποτυχία αποστολής μέσω EC2 Instance Connect: {error}",
         "ssh_progress_pane_connecting" => "Σύνδεση στο {label} ({host}:{port})...",
+        "ssh_progress_error" => "Σφάλμα: {error}",
+        "ssh_progress_method_auto" => "αυτόματο εντοπισμό",
+        "ssh_progress_method_password" => "κωδικό πρόσβασης",
+        "ssh_progress_method_password_prompt" => "κωδικό πρόσβασης κατόπιν ερώτησης",
+        "ssh_progress_method_key" => "δημόσιο κλειδί",
+        "ssh_progress_method_agent" => "πράκτορα SSH",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "πιστοποιητικό",
+        "ssh_progress_method_security_key" => "κλειδί ασφαλείας υλικού",
 
         // Navigation
         "expand" => "Ανάπτυξη",

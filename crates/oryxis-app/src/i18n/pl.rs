@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "Wysyłanie tymczasowego klucza publicznego do {instance} przez EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "Wysyłanie przez EC2 Instance Connect nie powiodło się: {error}",
         "ssh_progress_pane_connecting" => "Łączenie z {label} ({host}:{port})...",
+        "ssh_progress_error" => "Błąd: {error}",
+        "ssh_progress_method_auto" => "automatycznego wykrywania",
+        "ssh_progress_method_password" => "hasła",
+        "ssh_progress_method_password_prompt" => "hasła podawanego przy połączeniu",
+        "ssh_progress_method_key" => "klucza publicznego",
+        "ssh_progress_method_agent" => "agenta SSH",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "certyfikatu",
+        "ssh_progress_method_security_key" => "sprzętowego klucza bezpieczeństwa",
 
         // Navigation
         "expand" => "Rozwiń",

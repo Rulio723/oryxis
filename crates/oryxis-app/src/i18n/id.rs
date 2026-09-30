@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "Mengirim kunci publik sementara ke {instance} melalui EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "Pengiriman melalui EC2 Instance Connect gagal: {error}",
         "ssh_progress_pane_connecting" => "Menghubungkan ke {label} ({host}:{port})...",
+        "ssh_progress_error" => "Kesalahan: {error}",
+        "ssh_progress_method_auto" => "deteksi otomatis",
+        "ssh_progress_method_password" => "kata sandi",
+        "ssh_progress_method_password_prompt" => "kata sandi yang diminta",
+        "ssh_progress_method_key" => "kunci publik",
+        "ssh_progress_method_agent" => "agen SSH",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "sertifikat",
+        "ssh_progress_method_security_key" => "kunci keamanan perangkat keras",
 
         // Navigation
         "expand" => "Perluas",

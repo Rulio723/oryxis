@@ -32,6 +32,8 @@ mod mosh;
 mod progress;
 mod session;
 
+pub(crate) use connect::pane_connecting_line;
+
 use iced::Task;
 
 use std::sync::Arc;

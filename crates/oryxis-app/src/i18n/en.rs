@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> &'static str {
         "ssh_progress_instance_connect" => "Pushing temporary public key to {instance} via EC2 Instance Connect…",
         "ssh_progress_instance_connect_failed" => "EC2 Instance Connect push failed: {error}",
         "ssh_progress_pane_connecting" => "Connecting to {label} ({host}:{port})...",
+        "ssh_progress_error" => "Error: {error}",
+        "ssh_progress_method_auto" => "auto-detect",
+        "ssh_progress_method_password" => "password",
+        "ssh_progress_method_password_prompt" => "prompted password",
+        "ssh_progress_method_key" => "public key",
+        "ssh_progress_method_agent" => "SSH agent",
+        "ssh_progress_method_interactive" => "keyboard-interactive",
+        "ssh_progress_method_certificate" => "certificate",
+        "ssh_progress_method_security_key" => "hardware security key",
 
         // Navigation
         "expand" => "Expand",

@@ -529,11 +529,7 @@ impl Oryxis {
                             .expect("display-only terminal");
                         term.set_palette(self.resolve_terminal_palette_for_connection(conn));
                         term.process(
-                            format!(
-                                "Connecting to {} ({}:{})...\r\n",
-                                conn.label, conn.hostname, conn.port
-                            )
-                            .as_bytes(),
+                            crate::dispatch_ssh::pane_connecting_line(conn).as_bytes(),
                         );
                         let mut pane =
                             Pane::new(conn.label.clone(), Arc::new(Mutex::new(term)));

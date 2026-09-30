@@ -19,6 +19,15 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "ssh_progress_instance_connect" => "Geçici açık anahtar EC2 Instance Connect üzerinden {instance} hedefine gönderiliyor…",
         "ssh_progress_instance_connect_failed" => "EC2 Instance Connect gönderimi başarısız: {error}",
         "ssh_progress_pane_connecting" => "{label} ({host}:{port}) hedefine bağlanılıyor...",
+        "ssh_progress_error" => "Hata: {error}",
+        "ssh_progress_method_auto" => "otomatik algılama",
+        "ssh_progress_method_password" => "parola",
+        "ssh_progress_method_password_prompt" => "sorulan parola",
+        "ssh_progress_method_key" => "açık anahtar",
+        "ssh_progress_method_agent" => "SSH aracısı",
+        "ssh_progress_method_interactive" => "klavye etkileşimli kimlik doğrulama",
+        "ssh_progress_method_certificate" => "sertifika",
+        "ssh_progress_method_security_key" => "donanım güvenlik anahtarı",
 
         // Navigation
         "expand" => "Genişlet",
