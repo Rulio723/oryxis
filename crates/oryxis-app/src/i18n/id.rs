@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Memulai koneksi baru ke \"{host}\", port {port}",
+        "ssh_progress_connecting" => "Mencari alamat dan menghubungkan ke \"{host}\", port {port}...",
+        "ssh_progress_handshake" => "Koneksi terjalin, negosiasi SSH selesai dan kunci host terverifikasi",
+        "ssh_progress_authenticating" => "Mengautentikasi sebagai \"{user}\" menggunakan {method}...",
+        "ssh_progress_authenticated" => "Terautentikasi sebagai \"{user}\"",
+        "ssh_progress_opening_session" => "Membuka sesi terminal dan meminta PTY...",
+        "ssh_progress_connection_failed" => "Koneksi ke \"{host}\", port {port} gagal: {error}",
+        "ssh_progress_auth_failed" => "Autentikasi untuk \"{user}\" gagal: {error}",
+        "ssh_progress_session_failed" => "Penyiapan sesi terminal gagal: {error}",
+        "ssh_progress_jump_hosts" => "Host perantara dalam rute: {count}",
+        "ssh_progress_proxy" => "Menggunakan proksi {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "Menggunakan proksi perintah",
+        "ssh_progress_forwards" => "Penerusan port: {forwards}",
+        "ssh_progress_instance_connect" => "Mengirim kunci publik sementara ke {instance} melalui EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "Pengiriman melalui EC2 Instance Connect gagal: {error}",
+        "ssh_progress_pane_connecting" => "Menghubungkan ke {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "Perluas",
         "collapse" => "Ciutkan",

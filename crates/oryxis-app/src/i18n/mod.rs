@@ -420,7 +420,72 @@ fn translate(key: &str, lang: Language) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::Language;
+    use super::*;
+
+    #[test]
+    fn ssh_progress_translations_cover_every_locale_and_keep_their_placeholders() {
+        type Lookup = fn(&str) -> Option<&'static str>;
+        let locales: &[(&str, Lookup)] = &[
+            ("en", |key| Some(en::lookup(key))),
+            ("zh", zh::lookup),
+            ("zh_tw", zh_tw::lookup),
+            ("de", de::lookup),
+            ("fr", fr::lookup),
+            ("es", es::lookup),
+            ("pt_br", pt_br::lookup),
+            ("it", it::lookup),
+            ("ja", ja::lookup),
+            ("ko", ko::lookup),
+            ("ru", ru::lookup),
+            ("uk", uk::lookup),
+            ("pl", pl::lookup),
+            ("tr", tr::lookup),
+            ("id", id::lookup),
+            ("vi", vi::lookup),
+            ("th", th::lookup),
+            ("hi", hi::lookup),
+            ("cs", cs::lookup),
+            ("el", el::lookup),
+            ("ar", ar::lookup),
+            ("fa", fa::lookup),
+            ("he", he::lookup),
+        ];
+        let keys = [
+            "ssh_progress_start",
+            "ssh_progress_connecting",
+            "ssh_progress_handshake",
+            "ssh_progress_authenticating",
+            "ssh_progress_authenticated",
+            "ssh_progress_opening_session",
+            "ssh_progress_connection_failed",
+            "ssh_progress_auth_failed",
+            "ssh_progress_session_failed",
+            "ssh_progress_jump_hosts",
+            "ssh_progress_proxy",
+            "ssh_progress_command_proxy",
+            "ssh_progress_forwards",
+            "ssh_progress_instance_connect",
+            "ssh_progress_instance_connect_failed",
+            "ssh_progress_pane_connecting",
+        ];
+        fn placeholders(text: &str) -> std::collections::BTreeSet<&str> {
+            text.split('{')
+                .skip(1)
+                .filter_map(|part| part.split_once('}').map(|(name, _)| name))
+                .collect()
+        }
+        assert_eq!(locales.len(), Language::ALL.len());
+        for (locale, lookup) in locales {
+            for key in keys {
+                let text = lookup(key).unwrap_or_else(|| panic!("{locale} is missing {key}"));
+                assert_eq!(
+                    placeholders(text),
+                    placeholders(en::lookup(key)),
+                    "{locale}: {key}",
+                );
+            }
+        }
+    }
 
     /// Every supported code resolves to itself, regardless of case or
     /// the `_` separator some platforms use.

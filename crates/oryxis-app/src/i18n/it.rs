@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Avvio di una nuova connessione a “{host}”, porta {port}",
+        "ssh_progress_connecting" => "Risoluzione dell’indirizzo e connessione a “{host}”, porta {port}...",
+        "ssh_progress_handshake" => "Connessione stabilita, negoziazione SSH completata e chiave dell’host verificata",
+        "ssh_progress_authenticating" => "Autenticazione come “{user}” tramite {method}...",
+        "ssh_progress_authenticated" => "Autenticazione come “{user}” riuscita",
+        "ssh_progress_opening_session" => "Apertura della sessione del terminale e richiesta di un PTY...",
+        "ssh_progress_connection_failed" => "Connessione a “{host}”, porta {port}, non riuscita: {error}",
+        "ssh_progress_auth_failed" => "Autenticazione di “{user}” non riuscita: {error}",
+        "ssh_progress_session_failed" => "Creazione della sessione del terminale non riuscita: {error}",
+        "ssh_progress_jump_hosts" => "Host di salto nel percorso: {count}",
+        "ssh_progress_proxy" => "Utilizzo del proxy {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "Utilizzo del proxy a comando",
+        "ssh_progress_forwards" => "Inoltri di porte: {forwards}",
+        "ssh_progress_instance_connect" => "Invio della chiave pubblica temporanea a {instance} tramite EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "Invio tramite EC2 Instance Connect non riuscito: {error}",
+        "ssh_progress_pane_connecting" => "Connessione a {label} ({host}:{port})...",
+
         "expand" => "Espandi",
         "collapse" => "Comprimi",
         "nav_orientation" => "Navigazione",

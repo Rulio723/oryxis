@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> &'static str {
     match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Starting a new connection to \"{host}\" port {port}",
+        "ssh_progress_connecting" => "Resolving address and connecting to \"{host}\" port {port}...",
+        "ssh_progress_handshake" => "Connection established, SSH handshake complete and host key verified",
+        "ssh_progress_authenticating" => "Authenticating as \"{user}\" using {method}...",
+        "ssh_progress_authenticated" => "Authenticated as \"{user}\"",
+        "ssh_progress_opening_session" => "Opening terminal session and requesting a PTY...",
+        "ssh_progress_connection_failed" => "Connection to \"{host}\" port {port} failed: {error}",
+        "ssh_progress_auth_failed" => "Authentication failed for \"{user}\": {error}",
+        "ssh_progress_session_failed" => "Terminal session setup failed: {error}",
+        "ssh_progress_jump_hosts" => "Jump hosts in route: {count}",
+        "ssh_progress_proxy" => "Using {kind} proxy {host}:{port}",
+        "ssh_progress_command_proxy" => "Using command proxy",
+        "ssh_progress_forwards" => "Port forwards: {forwards}",
+        "ssh_progress_instance_connect" => "Pushing temporary public key to {instance} via EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "EC2 Instance Connect push failed: {error}",
+        "ssh_progress_pane_connecting" => "Connecting to {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "Expand",
         "collapse" => "Collapse",

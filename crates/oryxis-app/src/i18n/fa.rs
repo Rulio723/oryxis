@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "آغاز اتصال جدید به «{host}» در درگاه {port}",
+        "ssh_progress_connecting" => "در حال یافتن نشانی و اتصال به «{host}» در درگاه {port}...",
+        "ssh_progress_handshake" => "اتصال برقرار شد، دست‌دهی SSH کامل و کلید میزبان تأیید شد",
+        "ssh_progress_authenticating" => "در حال احراز هویت با نام «{user}» با استفاده از {method}...",
+        "ssh_progress_authenticated" => "احراز هویت با نام «{user}» انجام شد",
+        "ssh_progress_opening_session" => "در حال باز کردن نشست پایانه و درخواست PTY...",
+        "ssh_progress_connection_failed" => "اتصال به «{host}» در درگاه {port} ناموفق بود: {error}",
+        "ssh_progress_auth_failed" => "احراز هویت «{user}» ناموفق بود: {error}",
+        "ssh_progress_session_failed" => "راه‌اندازی نشست پایانه ناموفق بود: {error}",
+        "ssh_progress_jump_hosts" => "تعداد میزبان‌های واسط در مسیر: {count}",
+        "ssh_progress_proxy" => "استفاده از پراکسی {kind} در {host}:{port}",
+        "ssh_progress_command_proxy" => "استفاده از پراکسی فرمان",
+        "ssh_progress_forwards" => "ارسال درگاه‌ها: {forwards}",
+        "ssh_progress_instance_connect" => "در حال ارسال کلید عمومی موقت به {instance} از طریق EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "ارسال از طریق EC2 Instance Connect ناموفق بود: {error}",
+        "ssh_progress_pane_connecting" => "در حال اتصال به {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "گسترش",
         "collapse" => "جمع کردن",

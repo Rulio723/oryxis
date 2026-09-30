@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "开始连接“{host}”，端口 {port}",
+        "ssh_progress_connecting" => "正在解析地址并连接“{host}”，端口 {port}...",
+        "ssh_progress_handshake" => "连接已建立，SSH 握手完成，主机密钥已验证",
+        "ssh_progress_authenticating" => "正在以“{user}”使用{method}进行身份验证...",
+        "ssh_progress_authenticated" => "已通过“{user}”的身份验证",
+        "ssh_progress_opening_session" => "正在打开终端会话并请求伪终端（PTY）...",
+        "ssh_progress_connection_failed" => "连接“{host}”的端口 {port} 失败：{error}",
+        "ssh_progress_auth_failed" => "“{user}”的身份验证失败：{error}",
+        "ssh_progress_session_failed" => "终端会话建立失败：{error}",
+        "ssh_progress_jump_hosts" => "连接路径中的跳板主机数量：{count}",
+        "ssh_progress_proxy" => "正在使用 {kind} 代理 {host}:{port}",
+        "ssh_progress_command_proxy" => "正在使用命令代理",
+        "ssh_progress_forwards" => "端口转发：{forwards}",
+        "ssh_progress_instance_connect" => "正在通过 EC2 Instance Connect 向 {instance} 推送临时公钥…",
+        "ssh_progress_instance_connect_failed" => "EC2 Instance Connect 公钥推送失败：{error}",
+        "ssh_progress_pane_connecting" => "正在连接 {label}（{host}:{port}）...",
+
         "expand" => "展开",
         "collapse" => "收起",
         "nav_orientation" => "导航",

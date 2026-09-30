@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "بدء اتصال جديد بالمضيف «{host}» على المنفذ {port}",
+        "ssh_progress_connecting" => "جارٍ حل العنوان والاتصال بالمضيف «{host}» على المنفذ {port}...",
+        "ssh_progress_handshake" => "تم الاتصال وإكمال مصافحة SSH والتحقق من مفتاح المضيف",
+        "ssh_progress_authenticating" => "جارٍ المصادقة باسم «{user}» باستخدام {method}...",
+        "ssh_progress_authenticated" => "تمت المصادقة باسم «{user}»",
+        "ssh_progress_opening_session" => "جارٍ فتح جلسة الطرفية وطلب PTY...",
+        "ssh_progress_connection_failed" => "فشل الاتصال بالمضيف «{host}» على المنفذ {port}: {error}",
+        "ssh_progress_auth_failed" => "فشلت المصادقة للمستخدم «{user}»: {error}",
+        "ssh_progress_session_failed" => "فشل إعداد جلسة الطرفية: {error}",
+        "ssh_progress_jump_hosts" => "عدد المضيفين الوسيطين في المسار: {count}",
+        "ssh_progress_proxy" => "استخدام الوكيل {kind} على {host}:{port}",
+        "ssh_progress_command_proxy" => "استخدام وكيل الأوامر",
+        "ssh_progress_forwards" => "إعادة توجيه المنافذ: {forwards}",
+        "ssh_progress_instance_connect" => "جارٍ إرسال مفتاح عام مؤقت إلى {instance} عبر EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "فشل الإرسال عبر EC2 Instance Connect: {error}",
+        "ssh_progress_pane_connecting" => "جارٍ الاتصال بـ {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "توسيع",
         "collapse" => "طي",

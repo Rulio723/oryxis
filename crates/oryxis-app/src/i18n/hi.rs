@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "\"{host}\" के पोर्ट {port} से नया कनेक्शन शुरू हो रहा है",
+        "ssh_progress_connecting" => "पता खोजकर \"{host}\" के पोर्ट {port} से कनेक्ट किया जा रहा है...",
+        "ssh_progress_handshake" => "कनेक्शन स्थापित, SSH हैंडशेक पूरा और होस्ट कुंजी सत्यापित",
+        "ssh_progress_authenticating" => "{method} का उपयोग करके \"{user}\" के रूप में प्रमाणीकरण हो रहा है...",
+        "ssh_progress_authenticated" => "\"{user}\" के रूप में प्रमाणित",
+        "ssh_progress_opening_session" => "टर्मिनल सत्र खोला जा रहा है और PTY का अनुरोध किया जा रहा है...",
+        "ssh_progress_connection_failed" => "\"{host}\" के पोर्ट {port} से कनेक्शन विफल: {error}",
+        "ssh_progress_auth_failed" => "\"{user}\" का प्रमाणीकरण विफल: {error}",
+        "ssh_progress_session_failed" => "टर्मिनल सत्र सेटअप विफल: {error}",
+        "ssh_progress_jump_hosts" => "मार्ग में जंप होस्ट की संख्या: {count}",
+        "ssh_progress_proxy" => "{kind} प्रॉक्सी {host}:{port} का उपयोग हो रहा है",
+        "ssh_progress_command_proxy" => "कमांड प्रॉक्सी का उपयोग हो रहा है",
+        "ssh_progress_forwards" => "पोर्ट फ़ॉरवर्डिंग: {forwards}",
+        "ssh_progress_instance_connect" => "EC2 Instance Connect से {instance} को अस्थायी सार्वजनिक कुंजी भेजी जा रही है…",
+        "ssh_progress_instance_connect_failed" => "EC2 Instance Connect से भेजना विफल: {error}",
+        "ssh_progress_pane_connecting" => "{label} ({host}:{port}) से कनेक्ट हो रहा है...",
+
         // Navigation
         "expand" => "विस्तृत करें",
         "collapse" => "संक्षिप्त करें",

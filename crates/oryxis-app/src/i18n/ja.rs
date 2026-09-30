@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "「{host}」のポート {port} への接続を開始しています",
+        "ssh_progress_connecting" => "アドレスを解決し、「{host}」のポート {port} に接続しています...",
+        "ssh_progress_handshake" => "接続が確立され、SSH ハンドシェイクとホスト鍵の検証が完了しました",
+        "ssh_progress_authenticating" => "{method} を使用して「{user}」として認証しています...",
+        "ssh_progress_authenticated" => "「{user}」として認証されました",
+        "ssh_progress_opening_session" => "ターミナルセッションを開き、PTY を要求しています...",
+        "ssh_progress_connection_failed" => "「{host}」のポート {port} への接続に失敗しました: {error}",
+        "ssh_progress_auth_failed" => "「{user}」の認証に失敗しました: {error}",
+        "ssh_progress_session_failed" => "ターミナルセッションの作成に失敗しました: {error}",
+        "ssh_progress_jump_hosts" => "接続経路の踏み台ホスト数: {count}",
+        "ssh_progress_proxy" => "{kind} プロキシ {host}:{port} を使用しています",
+        "ssh_progress_command_proxy" => "コマンドプロキシを使用しています",
+        "ssh_progress_forwards" => "ポート転送: {forwards}",
+        "ssh_progress_instance_connect" => "EC2 Instance Connect 経由で {instance} に一時公開鍵を送信しています…",
+        "ssh_progress_instance_connect_failed" => "EC2 Instance Connect での送信に失敗しました: {error}",
+        "ssh_progress_pane_connecting" => "{label} ({host}:{port}) に接続しています...",
+
         "expand" => "展開",
         "collapse" => "折りたたむ",
         "nav_orientation" => "ナビゲーション",

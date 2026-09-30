@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "מתחיל חיבור חדש אל „{host}” ביציאה {port}",
+        "ssh_progress_connecting" => "פותר את הכתובת ומתחבר אל „{host}” ביציאה {port}...",
+        "ssh_progress_handshake" => "החיבור נוצר, לחיצת היד של SSH הושלמה ומפתח המארח אומת",
+        "ssh_progress_authenticating" => "מאמת את „{user}” באמצעות {method}...",
+        "ssh_progress_authenticated" => "האימות בתור „{user}” הושלם",
+        "ssh_progress_opening_session" => "פותח הפעלת מסוף ומבקש PTY...",
+        "ssh_progress_connection_failed" => "החיבור אל „{host}” ביציאה {port} נכשל: {error}",
+        "ssh_progress_auth_failed" => "האימות של „{user}” נכשל: {error}",
+        "ssh_progress_session_failed" => "הגדרת הפעלת המסוף נכשלה: {error}",
+        "ssh_progress_jump_hosts" => "מספר מארחי הביניים במסלול: {count}",
+        "ssh_progress_proxy" => "משתמש בשרת מתווך {kind} בכתובת {host}:{port}",
+        "ssh_progress_command_proxy" => "משתמש בשרת מתווך באמצעות פקודה",
+        "ssh_progress_forwards" => "העברות יציאות: {forwards}",
+        "ssh_progress_instance_connect" => "שולח מפתח ציבורי זמני אל {instance} באמצעות EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "השליחה באמצעות EC2 Instance Connect נכשלה: {error}",
+        "ssh_progress_pane_connecting" => "מתחבר אל {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "הרחבה",
         "collapse" => "כיווץ",

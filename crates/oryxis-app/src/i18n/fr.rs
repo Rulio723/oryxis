@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Démarrage d’une nouvelle connexion à « {host} », port {port}",
+        "ssh_progress_connecting" => "Résolution de l’adresse et connexion à « {host} », port {port}...",
+        "ssh_progress_handshake" => "Connexion établie, négociation SSH terminée et clé de l’hôte vérifiée",
+        "ssh_progress_authenticating" => "Authentification de « {user} » avec {method}...",
+        "ssh_progress_authenticated" => "Authentification de « {user} » réussie",
+        "ssh_progress_opening_session" => "Ouverture de la session de terminal et demande d’un PTY...",
+        "ssh_progress_connection_failed" => "Échec de la connexion à « {host} », port {port} : {error}",
+        "ssh_progress_auth_failed" => "Échec de l’authentification de « {user} » : {error}",
+        "ssh_progress_session_failed" => "Échec de la création de la session de terminal : {error}",
+        "ssh_progress_jump_hosts" => "Hôtes de rebond sur le chemin : {count}",
+        "ssh_progress_proxy" => "Utilisation du proxy {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "Utilisation d’un proxy par commande",
+        "ssh_progress_forwards" => "Redirections de ports : {forwards}",
+        "ssh_progress_instance_connect" => "Envoi de la clé publique temporaire à {instance} via EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "Échec de l’envoi via EC2 Instance Connect : {error}",
+        "ssh_progress_pane_connecting" => "Connexion à {label} ({host}:{port})...",
+
         "expand" => "Développer",
         "collapse" => "Réduire",
         "nav_orientation" => "Navigation",

@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "開始連線至「{host}」，連接埠 {port}",
+        "ssh_progress_connecting" => "正在解析位址並連線至「{host}」，連接埠 {port}...",
+        "ssh_progress_handshake" => "連線已建立，SSH 交握完成，主機金鑰已驗證",
+        "ssh_progress_authenticating" => "正在以「{user}」使用{method}進行身分驗證...",
+        "ssh_progress_authenticated" => "已通過「{user}」的身分驗證",
+        "ssh_progress_opening_session" => "正在開啟終端機工作階段並要求虛擬終端機（PTY）...",
+        "ssh_progress_connection_failed" => "連線至「{host}」的連接埠 {port} 失敗：{error}",
+        "ssh_progress_auth_failed" => "「{user}」的身分驗證失敗：{error}",
+        "ssh_progress_session_failed" => "終端機工作階段建立失敗：{error}",
+        "ssh_progress_jump_hosts" => "連線路徑中的跳板主機數量：{count}",
+        "ssh_progress_proxy" => "正在使用 {kind} 代理 {host}:{port}",
+        "ssh_progress_command_proxy" => "正在使用命令代理",
+        "ssh_progress_forwards" => "連接埠轉送：{forwards}",
+        "ssh_progress_instance_connect" => "正在透過 EC2 Instance Connect 將臨時公鑰推送至 {instance}…",
+        "ssh_progress_instance_connect_failed" => "EC2 Instance Connect 公鑰推送失敗：{error}",
+        "ssh_progress_pane_connecting" => "正在連線至 {label}（{host}:{port}）...",
+
         "expand" => "展開",
         "collapse" => "收合",
         "nav_orientation" => "導覽",

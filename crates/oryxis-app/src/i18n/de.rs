@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Neue Verbindung zu „{host}“, Port {port}, wird gestartet",
+        "ssh_progress_connecting" => "Adresse wird aufgelöst und Verbindung zu „{host}“, Port {port}, hergestellt...",
+        "ssh_progress_handshake" => "Verbindung hergestellt, SSH-Handshake abgeschlossen und Hostschlüssel geprüft",
+        "ssh_progress_authenticating" => "Authentifizierung als „{user}“ mit {method}...",
+        "ssh_progress_authenticated" => "Als „{user}“ authentifiziert",
+        "ssh_progress_opening_session" => "Terminalsitzung wird geöffnet und ein PTY angefordert...",
+        "ssh_progress_connection_failed" => "Verbindung zu „{host}“, Port {port}, fehlgeschlagen: {error}",
+        "ssh_progress_auth_failed" => "Authentifizierung für „{user}“ fehlgeschlagen: {error}",
+        "ssh_progress_session_failed" => "Einrichten der Terminalsitzung fehlgeschlagen: {error}",
+        "ssh_progress_jump_hosts" => "Sprungserver auf der Route: {count}",
+        "ssh_progress_proxy" => "{kind}-Proxy {host}:{port} wird verwendet",
+        "ssh_progress_command_proxy" => "Befehlsproxy wird verwendet",
+        "ssh_progress_forwards" => "Portweiterleitungen: {forwards}",
+        "ssh_progress_instance_connect" => "Temporärer öffentlicher Schlüssel wird über EC2 Instance Connect an {instance} gesendet…",
+        "ssh_progress_instance_connect_failed" => "EC2 Instance Connect: Schlüsselübertragung fehlgeschlagen: {error}",
+        "ssh_progress_pane_connecting" => "Verbindung zu {label} ({host}:{port}) wird hergestellt...",
+
         "expand" => "Ausklappen",
         "collapse" => "Einklappen",
         "nav_orientation" => "Navigation",

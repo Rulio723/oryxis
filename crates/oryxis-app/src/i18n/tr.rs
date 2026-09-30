@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "\"{host}\" sunucusunun {port} bağlantı noktasına yeni bağlantı başlatılıyor",
+        "ssh_progress_connecting" => "Adres çözümleniyor ve \"{host}\" sunucusunun {port} bağlantı noktasına bağlanılıyor...",
+        "ssh_progress_handshake" => "Bağlantı kuruldu, SSH el sıkışması tamamlandı ve sunucu anahtarı doğrulandı",
+        "ssh_progress_authenticating" => "{method} kullanılarak \"{user}\" olarak kimlik doğrulanıyor...",
+        "ssh_progress_authenticated" => "\"{user}\" olarak kimlik doğrulandı",
+        "ssh_progress_opening_session" => "Terminal oturumu açılıyor ve PTY isteniyor...",
+        "ssh_progress_connection_failed" => "\"{host}\" sunucusunun {port} bağlantı noktasına bağlanılamadı: {error}",
+        "ssh_progress_auth_failed" => "\"{user}\" için kimlik doğrulama başarısız: {error}",
+        "ssh_progress_session_failed" => "Terminal oturumu kurulamadı: {error}",
+        "ssh_progress_jump_hosts" => "Yoldaki atlama sunucusu sayısı: {count}",
+        "ssh_progress_proxy" => "{kind} vekili {host}:{port} kullanılıyor",
+        "ssh_progress_command_proxy" => "Komut vekili kullanılıyor",
+        "ssh_progress_forwards" => "Bağlantı noktası yönlendirmeleri: {forwards}",
+        "ssh_progress_instance_connect" => "Geçici açık anahtar EC2 Instance Connect üzerinden {instance} hedefine gönderiliyor…",
+        "ssh_progress_instance_connect_failed" => "EC2 Instance Connect gönderimi başarısız: {error}",
+        "ssh_progress_pane_connecting" => "{label} ({host}:{port}) hedefine bağlanılıyor...",
+
         // Navigation
         "expand" => "Genişlet",
         "collapse" => "Daralt",

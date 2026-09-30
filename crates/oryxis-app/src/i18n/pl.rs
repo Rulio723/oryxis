@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Rozpoczynanie nowego połączenia z „{host}”, port {port}",
+        "ssh_progress_connecting" => "Rozwiązywanie adresu i łączenie z „{host}”, port {port}...",
+        "ssh_progress_handshake" => "Połączenie nawiązane, negocjacja SSH zakończona, klucz hosta zweryfikowany",
+        "ssh_progress_authenticating" => "Uwierzytelnianie jako „{user}” za pomocą {method}...",
+        "ssh_progress_authenticated" => "Uwierzytelniono jako „{user}”",
+        "ssh_progress_opening_session" => "Otwieranie sesji terminala i żądanie PTY...",
+        "ssh_progress_connection_failed" => "Nie udało się połączyć z „{host}”, port {port}: {error}",
+        "ssh_progress_auth_failed" => "Uwierzytelnianie użytkownika „{user}” nie powiodło się: {error}",
+        "ssh_progress_session_failed" => "Nie udało się utworzyć sesji terminala: {error}",
+        "ssh_progress_jump_hosts" => "Hosty pośredniczące na trasie: {count}",
+        "ssh_progress_proxy" => "Korzystanie z serwera proxy {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "Korzystanie z proxy polecenia",
+        "ssh_progress_forwards" => "Przekierowania portów: {forwards}",
+        "ssh_progress_instance_connect" => "Wysyłanie tymczasowego klucza publicznego do {instance} przez EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "Wysyłanie przez EC2 Instance Connect nie powiodło się: {error}",
+        "ssh_progress_pane_connecting" => "Łączenie z {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "Rozwiń",
         "collapse" => "Zwiń",

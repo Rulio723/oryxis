@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "\"{host}\"의 포트 {port}에 새 연결을 시작합니다",
+        "ssh_progress_connecting" => "주소를 확인하고 \"{host}\"의 포트 {port}에 연결 중...",
+        "ssh_progress_handshake" => "연결이 설정되었으며 SSH 핸드셰이크와 호스트 키 검증이 완료되었습니다",
+        "ssh_progress_authenticating" => "{method}을(를) 사용하여 \"{user}\" 사용자로 인증 중...",
+        "ssh_progress_authenticated" => "\"{user}\" 사용자로 인증되었습니다",
+        "ssh_progress_opening_session" => "터미널 세션을 열고 PTY를 요청하는 중...",
+        "ssh_progress_connection_failed" => "\"{host}\"의 포트 {port}에 연결하지 못했습니다: {error}",
+        "ssh_progress_auth_failed" => "\"{user}\" 사용자 인증에 실패했습니다: {error}",
+        "ssh_progress_session_failed" => "터미널 세션 설정에 실패했습니다: {error}",
+        "ssh_progress_jump_hosts" => "연결 경로의 점프 호스트 수: {count}",
+        "ssh_progress_proxy" => "{kind} 프록시 {host}:{port} 사용 중",
+        "ssh_progress_command_proxy" => "명령 프록시 사용 중",
+        "ssh_progress_forwards" => "포트 전달: {forwards}",
+        "ssh_progress_instance_connect" => "EC2 Instance Connect를 통해 {instance}에 임시 공개 키를 전송하는 중…",
+        "ssh_progress_instance_connect_failed" => "EC2 Instance Connect 전송에 실패했습니다: {error}",
+        "ssh_progress_pane_connecting" => "{label} ({host}:{port})에 연결 중...",
+
         // Navigation
         "expand" => "펼치기",
         "collapse" => "접기",

@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Начало нового подключения к «{host}», порт {port}",
+        "ssh_progress_connecting" => "Разрешение адреса и подключение к «{host}», порт {port}...",
+        "ssh_progress_handshake" => "Соединение установлено, согласование SSH завершено, ключ сервера проверен",
+        "ssh_progress_authenticating" => "Аутентификация пользователя «{user}» с помощью {method}...",
+        "ssh_progress_authenticated" => "Аутентификация пользователя «{user}» выполнена",
+        "ssh_progress_opening_session" => "Открытие сеанса терминала и запрос PTY...",
+        "ssh_progress_connection_failed" => "Не удалось подключиться к «{host}», порт {port}: {error}",
+        "ssh_progress_auth_failed" => "Ошибка аутентификации пользователя «{user}»: {error}",
+        "ssh_progress_session_failed" => "Не удалось создать сеанс терминала: {error}",
+        "ssh_progress_jump_hosts" => "Промежуточных серверов в маршруте: {count}",
+        "ssh_progress_proxy" => "Используется прокси {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "Используется командный прокси",
+        "ssh_progress_forwards" => "Перенаправления портов: {forwards}",
+        "ssh_progress_instance_connect" => "Отправка временного открытого ключа в {instance} через EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "Ошибка отправки через EC2 Instance Connect: {error}",
+        "ssh_progress_pane_connecting" => "Подключение к {label} ({host}:{port})...",
+
         "expand" => "Развернуть",
         "collapse" => "Свернуть",
         "nav_orientation" => "Навигация",

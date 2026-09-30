@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Початок нового підключення до «{host}», порт {port}",
+        "ssh_progress_connecting" => "Визначення адреси та підключення до «{host}», порт {port}...",
+        "ssh_progress_handshake" => "З’єднання встановлено, узгодження SSH завершено, ключ сервера перевірено",
+        "ssh_progress_authenticating" => "Автентифікація користувача «{user}» за допомогою {method}...",
+        "ssh_progress_authenticated" => "Користувача «{user}» автентифіковано",
+        "ssh_progress_opening_session" => "Відкриття сеансу термінала та запит PTY...",
+        "ssh_progress_connection_failed" => "Не вдалося підключитися до «{host}», порт {port}: {error}",
+        "ssh_progress_auth_failed" => "Помилка автентифікації користувача «{user}»: {error}",
+        "ssh_progress_session_failed" => "Не вдалося створити сеанс термінала: {error}",
+        "ssh_progress_jump_hosts" => "Проміжних серверів у маршруті: {count}",
+        "ssh_progress_proxy" => "Використовується проксі {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "Використовується командний проксі",
+        "ssh_progress_forwards" => "Перенаправлення портів: {forwards}",
+        "ssh_progress_instance_connect" => "Надсилання тимчасового відкритого ключа до {instance} через EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "Помилка надсилання через EC2 Instance Connect: {error}",
+        "ssh_progress_pane_connecting" => "Підключення до {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "Розгорнути",
         "collapse" => "Згорнути",

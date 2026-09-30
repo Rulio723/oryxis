@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Iniciando uma nova conexão com “{host}”, porta {port}",
+        "ssh_progress_connecting" => "Resolvendo o endereço e conectando a “{host}”, porta {port}...",
+        "ssh_progress_handshake" => "Conexão estabelecida, negociação SSH concluída e chave do host verificada",
+        "ssh_progress_authenticating" => "Autenticando como “{user}” usando {method}...",
+        "ssh_progress_authenticated" => "Autenticado como “{user}”",
+        "ssh_progress_opening_session" => "Abrindo a sessão do terminal e solicitando um PTY...",
+        "ssh_progress_connection_failed" => "Falha ao conectar a “{host}”, porta {port}: {error}",
+        "ssh_progress_auth_failed" => "Falha na autenticação de “{user}”: {error}",
+        "ssh_progress_session_failed" => "Falha ao criar a sessão do terminal: {error}",
+        "ssh_progress_jump_hosts" => "Hosts de salto na rota: {count}",
+        "ssh_progress_proxy" => "Usando o proxy {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "Usando proxy de comando",
+        "ssh_progress_forwards" => "Encaminhamentos de portas: {forwards}",
+        "ssh_progress_instance_connect" => "Enviando a chave pública temporária para {instance} via EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "Falha no envio via EC2 Instance Connect: {error}",
+        "ssh_progress_pane_connecting" => "Conectando a {label} ({host}:{port})...",
+
         "expand" => "Expandir",
         "collapse" => "Recolher",
         "nav_orientation" => "Navegação",

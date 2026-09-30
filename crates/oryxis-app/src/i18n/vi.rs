@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "Bắt đầu kết nối mới đến \"{host}\", cổng {port}",
+        "ssh_progress_connecting" => "Đang phân giải địa chỉ và kết nối đến \"{host}\", cổng {port}...",
+        "ssh_progress_handshake" => "Đã kết nối, hoàn tất bắt tay SSH và xác minh khóa máy chủ",
+        "ssh_progress_authenticating" => "Đang xác thực \"{user}\" bằng {method}...",
+        "ssh_progress_authenticated" => "Đã xác thực \"{user}\"",
+        "ssh_progress_opening_session" => "Đang mở phiên thiết bị đầu cuối và yêu cầu PTY...",
+        "ssh_progress_connection_failed" => "Kết nối đến \"{host}\", cổng {port} thất bại: {error}",
+        "ssh_progress_auth_failed" => "Xác thực \"{user}\" thất bại: {error}",
+        "ssh_progress_session_failed" => "Thiết lập phiên thiết bị đầu cuối thất bại: {error}",
+        "ssh_progress_jump_hosts" => "Số máy chủ trung gian trên tuyến: {count}",
+        "ssh_progress_proxy" => "Đang sử dụng proxy {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "Đang sử dụng proxy lệnh",
+        "ssh_progress_forwards" => "Chuyển tiếp cổng: {forwards}",
+        "ssh_progress_instance_connect" => "Đang gửi khóa công khai tạm thời đến {instance} qua EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "Gửi qua EC2 Instance Connect thất bại: {error}",
+        "ssh_progress_pane_connecting" => "Đang kết nối đến {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "Mở rộng",
         "collapse" => "Thu gọn",

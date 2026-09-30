@@ -2,6 +2,24 @@
 
 pub(super) fn lookup(key: &str) -> Option<&'static str> {
     Some(match key {
+        // SSH connection progress
+        "ssh_progress_start" => "เริ่มการเชื่อมต่อใหม่ไปยัง \"{host}\" พอร์ต {port}",
+        "ssh_progress_connecting" => "กำลังค้นหาที่อยู่และเชื่อมต่อไปยัง \"{host}\" พอร์ต {port}...",
+        "ssh_progress_handshake" => "เชื่อมต่อแล้ว จับมือ SSH เสร็จสิ้นและตรวจสอบคีย์โฮสต์แล้ว",
+        "ssh_progress_authenticating" => "กำลังยืนยันตัวตนเป็น \"{user}\" โดยใช้ {method}...",
+        "ssh_progress_authenticated" => "ยืนยันตัวตนเป็น \"{user}\" แล้ว",
+        "ssh_progress_opening_session" => "กำลังเปิดเซสชันเทอร์มินัลและขอ PTY...",
+        "ssh_progress_connection_failed" => "เชื่อมต่อไปยัง \"{host}\" พอร์ต {port} ไม่สำเร็จ: {error}",
+        "ssh_progress_auth_failed" => "ยืนยันตัวตนสำหรับ \"{user}\" ไม่สำเร็จ: {error}",
+        "ssh_progress_session_failed" => "ตั้งค่าเซสชันเทอร์มินัลไม่สำเร็จ: {error}",
+        "ssh_progress_jump_hosts" => "จำนวนโฮสต์ตัวกลางในเส้นทาง: {count}",
+        "ssh_progress_proxy" => "กำลังใช้พร็อกซี {kind} {host}:{port}",
+        "ssh_progress_command_proxy" => "กำลังใช้พร็อกซีคำสั่ง",
+        "ssh_progress_forwards" => "การส่งต่อพอร์ต: {forwards}",
+        "ssh_progress_instance_connect" => "กำลังส่งคีย์สาธารณะชั่วคราวไปยัง {instance} ผ่าน EC2 Instance Connect…",
+        "ssh_progress_instance_connect_failed" => "ส่งผ่าน EC2 Instance Connect ไม่สำเร็จ: {error}",
+        "ssh_progress_pane_connecting" => "กำลังเชื่อมต่อไปยัง {label} ({host}:{port})...",
+
         // Navigation
         "expand" => "ขยาย",
         "collapse" => "ยุบ",
