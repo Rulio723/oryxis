@@ -24,20 +24,6 @@ fn step_color(step: ConnectionStep) -> Color {
     }
 }
 
-/// Paint a translucent tint as an opaque color over `base`.
-///
-/// Timeline nodes sit on top of the one-piece guide rail. Pre-compositing
-/// their fill prevents that rail from showing through the glyphs.
-fn opaque_tint(base: Color, tint: Color, amount: f32) -> Color {
-    let amount = amount.clamp(0.0, 1.0);
-    Color {
-        r: base.r * (1.0 - amount) + tint.r * amount,
-        g: base.g * (1.0 - amount) + tint.g * amount,
-        b: base.b * (1.0 - amount) + tint.b * amount,
-        a: 1.0,
-    }
-}
-
 /// Glyph inside a timeline node disc: what this line was DOING, one
 /// icon per step so adjacent lines never repeat a symbol (kickoff,
 /// dialing, secured channel, credentials, accepted login, PTY setup).
@@ -881,11 +867,7 @@ impl Oryxis {
                 .center_x(Length::Fixed(28.0))
                 .center_y(Length::Fixed(28.0))
                 .style(move |_| container::Style {
-                    background: Some(Background::Color(opaque_tint(
-                        OryxisColors::t().bg_sidebar,
-                        node_color,
-                        tint_a,
-                    ))),
+                    background: Some(Background::Color(Color { a: tint_a, ..node_color })),
                     border: Border {
                         radius: Radius::from(14.0),
                         color: Color { a: ring_a, ..node_color },
@@ -1000,47 +982,12 @@ impl Oryxis {
                     message_cell.into(),
                 ])
                 .align_y(iced::Alignment::Start)
+                .height(Length::Shrink)
                 .into(),
             );
         }
 
-        let timeline_rows = column(rows).padding(Padding { top: 14.0, right: 16.0, bottom: 14.0, left: 12.0 });
-
-        // Keep one quiet rail behind the row stack. Per-row Fill connectors
-        // can end a fraction of a pixel before the next row after wrapping or
-        // DPI scaling; this base rail fills those seams while the colored
-        // segments and moving spark stay on top.
-        let base_line = container(Space::new())
-            .width(Length::Fixed(2.0))
-            .height(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(Background::Color(Color {
-                    a: 0.28,
-                    ..OryxisColors::t().text_muted
-                })),
-                ..Default::default()
-            });
-        let base_rail = container(
-            crate::widgets::dir_row(vec![
-                Space::new().width(Length::Fixed(15.0)).into(),
-                base_line.into(),
-                Space::new().width(Length::Fill).into(),
-            ])
-            .height(Length::Fill),
-        )
-        .padding(Padding {
-            top: 28.0,
-            right: 16.0,
-            bottom: 28.0,
-            left: 12.0,
-        })
-        .width(Length::Fill)
-        .height(Length::Fill);
-        let timeline = iced::widget::Stack::with_children(vec![
-            base_rail.into(),
-            timeline_rows.into(),
-        ])
-        .width(Length::Fill);
+        let timeline = column(rows).padding(Padding { top: 14.0, right: 16.0, bottom: 14.0, left: 12.0 });
         let log_list = scrollable(iced::widget::selectable_group::<(), Message, _, _>(timeline))
             .height(Length::Fill);
 
