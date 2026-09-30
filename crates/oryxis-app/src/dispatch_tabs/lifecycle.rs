@@ -70,6 +70,28 @@ impl Oryxis {
     /// responsible for repointing `active_tab` afterwards (the two
     /// paths land on different tabs). `idx` must be in bounds.
     pub(super) fn teardown_tab_at(&mut self, idx: usize) {
+        // The initial full-tab dial stores its abort handle on the progress
+        // card, not on the pane (split/reconnect dials use `Pane::dial_task`).
+        // Abort before dropping the progress state so an in-flight FIDO2
+        // request is cancelled immediately when the user closes the tab.
+        if self
+            .connecting
+            .as_ref()
+            .is_some_and(|progress| progress.tab_idx == idx)
+        {
+            self.abort_progress_dial();
+        }
+        // An aborted dial never reaches `SshConnected`, which is the other
+        // place that consumes these pending pane reuse keys.
+        let closing_panes: Vec<uuid::Uuid> = self.tabs[idx]
+            .pane_grid
+            .panes
+            .values()
+            .map(|pane| pane.id)
+            .collect();
+        for pane_id in &closing_panes {
+            self.pending_reuse_keys.remove(pane_id);
+        }
         // Persist recorded output before the tab (and its
         // panes' buffers) are dropped.
         self.flush_session_logs_final();
@@ -124,8 +146,6 @@ impl Oryxis {
         // Every pane in the tab takes its tmux listing with it. Keyed by
         // pane, so unlike the monitor series there is no "last live pane
         // of this host" question to ask.
-        let closing_panes: Vec<uuid::Uuid> =
-            self.tabs[idx].pane_grid.panes.values().map(|p| p.id).collect();
         for pane_id in closing_panes {
             self.tmux_reset_pane(&pane_id);
         }
