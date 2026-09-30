@@ -12,11 +12,67 @@ use crate::app::Oryxis;
 /// Whether this host's auth method ever offers a private key of its
 /// own. `Agent` is absent: its key lives in the agent process, and a
 /// local PEM would be a second credential the user did not pick.
+///
+/// `SecurityKey` is present: the hardware key IS this host's key, and the
+/// vault row (or the disk file) holds the credential handle the engine
+/// signs with.
 pub(crate) fn conn_uses_key(conn: &Connection) -> bool {
     matches!(
         conn.auth_method,
-        AuthMethod::Key | AuthMethod::Auto | AuthMethod::Certificate
+        AuthMethod::Key | AuthMethod::Auto | AuthMethod::Certificate | AuthMethod::SecurityKey
     )
+}
+
+/// Which `~/.ssh` default names the disk-key scan may pick for a host.
+///
+/// - `SecurityKey` scans only the `_sk` files: a software key there would
+///   be picked first ("first usable wins") and then refused by the method,
+///   a failure that reads as "my key is broken".
+/// - `Key` / `Certificate` take the `_sk` files after every software key,
+///   where this build can sign with a token at all: the method is "this
+///   key", and a machine whose only key is a token handle means that one.
+/// - `Auto` never scans them. Its point is to fall through to the agent
+///   and the password, and a token that is not plugged in holds the dial
+///   on the OS prompt for the whole auth budget before `Auto` could move
+///   on. A handle PICKED for an `Auto` host still signs; only the guess is
+///   off.
+///
+/// An explicit `identity_file` is never filtered: typing a path is the
+/// choice of key.
+pub(crate) fn disk_key_wanted(auth: &AuthMethod) -> oryxis_vault::DiskKeyWanted {
+    use oryxis_vault::DiskKeyWanted;
+    match auth {
+        AuthMethod::SecurityKey => DiskKeyWanted::SecurityKey,
+        AuthMethod::Key | AuthMethod::Certificate
+            if oryxis_ssh::sk::native_signing_supported() =>
+        {
+            DiskKeyWanted::SoftwareThenSecurityKey
+        }
+        _ => DiskKeyWanted::Software,
+    }
+}
+
+/// The security-key half of an attended dial
+/// (`SshEngine::with_security_key_prompts`): the words the PIN is asked
+/// with, and where "touch your key" goes. Only the dial sites a person
+/// drives call this; every other dial keeps the engine's refusal.
+pub(crate) fn security_key_prompts(
+    notices: Option<tokio::sync::mpsc::UnboundedSender<oryxis_ssh::SecurityKeyNotice>>,
+) -> oryxis_ssh::SecurityKeyPrompts {
+    oryxis_ssh::SecurityKeyPrompts {
+        pin_title: crate::i18n::t("sk_pin_title").to_string(),
+        pin_label: crate::i18n::t("sk_pin_label").to_string(),
+        pin_retry: crate::i18n::t("sk_pin_retry").to_string(),
+        notices,
+    }
+}
+
+/// What the card (or the pane) says while the token waits on a person.
+pub(crate) fn security_key_notice_text(notice: oryxis_ssh::SecurityKeyNotice) -> &'static str {
+    match notice {
+        oryxis_ssh::SecurityKeyNotice::Touch => crate::i18n::t("sk_touch_notice"),
+        oryxis_ssh::SecurityKeyNotice::Verify => crate::i18n::t("sk_verify_notice"),
+    }
 }
 
 impl Oryxis {
@@ -46,6 +102,37 @@ impl Oryxis {
             .find(|k| k.id == kid)
             .map(|k| k.public_key.clone())
             .filter(|p| !p.trim().is_empty())
+    }
+
+    /// Whether connecting to `conn` would ask a person to touch a security
+    /// key: the Security Key method, or a key (vault row or the `~/.ssh`
+    /// file the host would pick) that is a token handle.
+    ///
+    /// Dials nobody started (the auto-reconnect sweep, "connect at launch")
+    /// skip such hosts and leave them to a click: a prompt that appears on
+    /// its own is the one people learn to touch without reading.
+    pub(crate) fn host_signs_with_token(&self, conn: &Connection) -> bool {
+        if conn.auth_method == AuthMethod::SecurityKey {
+            return true;
+        }
+        if !conn_uses_key(conn) {
+            return false;
+        }
+        let kid = conn.key_id.or_else(|| {
+            conn.identity_id.and_then(|iid| {
+                self.identities.iter().find(|i| i.id == iid).and_then(|i| i.key_id)
+            })
+        });
+        if let Some(key) = kid.and_then(|kid| self.keys.iter().find(|k| k.id == kid)) {
+            return key.algorithm.is_security_key() && key.has_private;
+        }
+        oryxis_vault::resolve_disk_key(
+            conn.use_disk_key,
+            conn.identity_file.as_deref(),
+            disk_key_wanted(&conn.auth_method),
+        )
+        .material()
+        .is_some_and(|(pem, _)| oryxis_ssh::SkCredential::from_openssh_private(&pem).is_ok())
     }
 
     /// Resolve `(password, private_key_pem, certificate)` for a connection,
@@ -78,6 +165,7 @@ impl Oryxis {
                 match oryxis_vault::resolve_disk_key(
                     conn.use_disk_key,
                     conn.identity_file.as_deref(),
+                    disk_key_wanted(&conn.auth_method),
                 )
                 .material()
                 {
@@ -630,7 +718,8 @@ impl UnattendedDial {
 
 #[cfg(test)]
 mod tests {
-    use super::quick_connect_offerable;
+    use super::{conn_uses_key, disk_key_wanted, quick_connect_offerable};
+    use oryxis_core::models::connection::{AuthMethod, Connection};
     use oryxis_core::ssh_target::SshTarget;
 
     fn parsed(s: &str) -> SshTarget {
@@ -654,5 +743,53 @@ mod tests {
         let t = parsed("staging");
         assert!(!quick_connect_offerable(&t, true));
         assert!(quick_connect_offerable(&t, false));
+    }
+
+    fn host(auth: AuthMethod) -> Connection {
+        let mut conn = Connection::new("h", "h.example");
+        conn.auth_method = auth;
+        conn
+    }
+
+    #[test]
+    fn a_key_offering_method_is_what_resolves_a_vault_key() {
+        // The methods that name a key of their own, including the
+        // hardware-only one, whose vault row holds the token handle.
+        for auth in [
+            AuthMethod::Key,
+            AuthMethod::Auto,
+            AuthMethod::Certificate,
+            AuthMethod::SecurityKey,
+        ] {
+            let name = format!("{auth:?}");
+            assert!(conn_uses_key(&host(auth)), "{name} should offer a key");
+        }
+        // `Agent`'s key lives in the agent process, and the rest carry no
+        // key at all: resolving one would be a credential nobody picked.
+        for auth in [
+            AuthMethod::Agent,
+            AuthMethod::Password,
+            AuthMethod::Interactive,
+            AuthMethod::PasswordPrompt,
+        ] {
+            let name = format!("{auth:?}");
+            assert!(!conn_uses_key(&host(auth)), "{name} should not offer a key");
+        }
+    }
+
+    #[test]
+    fn the_disk_scan_takes_what_the_method_wants() {
+        use oryxis_vault::DiskKeyWanted;
+        assert_eq!(disk_key_wanted(&AuthMethod::SecurityKey), DiskKeyWanted::SecurityKey);
+        let explicit_key = if oryxis_ssh::sk::native_signing_supported() {
+            DiskKeyWanted::SoftwareThenSecurityKey
+        } else {
+            DiskKeyWanted::Software
+        };
+        assert_eq!(disk_key_wanted(&AuthMethod::Key), explicit_key);
+        assert_eq!(disk_key_wanted(&AuthMethod::Certificate), explicit_key);
+        // `Auto` never guesses a token: a missing one would hold the dial
+        // on the OS prompt past the point `Auto` could fall through.
+        assert_eq!(disk_key_wanted(&AuthMethod::Auto), DiskKeyWanted::Software);
     }
 }

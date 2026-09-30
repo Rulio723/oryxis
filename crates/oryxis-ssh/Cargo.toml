@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 oryxis-core = { workspace = true }
+# Native security-key signing: the token transport (`sk` is the SSH half).
+oryxis-fido2 = { workspace = true }
 russh = { workspace = true }
 russh-sftp = "2.4"
 tokio = { workspace = true }
@@ -34,6 +36,8 @@ filetime = "0.2"
 # answer is a `\\?\` verbatim path that `lpwd` would print and `lcd ..`
 # could not walk. Already in the lock as a transitive.
 dunce = "1"
+# A security key's PIN crosses from the UI bridge to the token thread.
+zeroize = { workspace = true }
 
 # Enumerate the named-pipe namespace to discover Pageant/KeePassXC's
 # per-launch agent pipe (windows_agent_pipe). Windows-only.
@@ -76,3 +80,8 @@ tempfile = "3"
 # is the only evidence of which forwarding branch was taken.
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
+# The security-key tests verify their signatures the way OpenSSH's
+# `sk_*_verify` does, which needs a software "token" holding the private
+# half. Both are already in the lock (sync stack, ssh-key).
+ed25519-dalek = { workspace = true }
+p256 = { version = "0.14", features = ["ecdsa"] }

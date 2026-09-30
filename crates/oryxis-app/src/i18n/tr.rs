@@ -2331,6 +2331,16 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "Genel anahtar özel anahtarla eşleşmiyor.",
         "cert_no_keys_hint" => "Kasada henüz sertifika eklenmiş bir anahtar yok.",
         "cert_key_no_cert_hint" => "Seçilen anahtarın eklenmiş bir sertifikası yok.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Güvenlik anahtarı",
+        "security_key_help" => "Yalnızca bu donanım anahtarı sunulur; aracı, başka anahtar veya parola geri dönüşü yoktur. Anahtar yoksa ya da dokunma reddedilirse bağlantı başarısız olur.",
+        "security_key_none_imported" => "Kasada henüz güvenlik anahtarı yok. ssh-keygen tarafından oluşturulan id_ed25519_sk / id_ecdsa_sk dosyasını içe aktarın.",
+        "sk_pin_title" => "Güvenlik anahtarı PIN'i",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "Yanlış PIN. Anahtar kilitlenmeden önce {n} deneme hakkı kaldı.",
+        "sk_touch_notice" => "Devam etmek için güvenlik anahtarınıza dokunun",
+        "sk_verify_notice" => "Devam etmek için güvenlik anahtarınızda doğrulayın (PIN veya parmak izi)",
+        "security_key_unsupported_platform" => "Bu platform henüz güvenlik anahtarıyla imzalayamıyor (Windows, macOS ve Linux imzalayabiliyor). Anahtarı tutan bir ssh-agent ile Agent yöntemini kullanın.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Genel anahtarı içe aktar",
         "key_badge_security_key" => "Güvenlik anahtarı",

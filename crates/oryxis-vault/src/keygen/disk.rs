@@ -32,15 +32,40 @@ use std::path::{Path, PathBuf};
 /// best-first rather than in OpenSSH's own order: OpenSSH tries all of
 /// them and we offer one, so leading with `id_rsa` (its historical
 /// first) would pick the weakest key on a machine that has several.
-///
-/// `id_ed25519_sk` / `id_ecdsa_sk` are deliberately absent: a security
-/// key's private file is useless without the token, so scanning it in
-/// would shadow a usable key with one the engine cannot sign with.
-/// Hardware keys reach a host through the agent (`AuthMethod::Agent`
-/// and its preferred-identity pin), which is where the token lives.
 /// `id_dsa` is absent because DSA is disabled server-side in current
-/// OpenSSH; an explicit `identity_file` can still name either.
-const DEFAULT_KEY_NAMES: &[&str] = &["id_ed25519", "id_ecdsa", "id_rsa"];
+/// OpenSSH; an explicit `identity_file` can still name it.
+const SOFTWARE_KEY_NAMES: &[&str] = &["id_ed25519", "id_ecdsa", "id_rsa"];
+
+/// The security-key files `ssh-keygen -t ed25519-sk` / `ecdsa-sk` write.
+/// Their "private" body is a token handle, so they are only worth
+/// offering where the app can sign with a token natively, and only AFTER
+/// every software key: "first usable wins", and a key that works without
+/// hardware must never be shadowed by one that needs a token plugged in.
+const SECURITY_KEY_NAMES: &[&str] = &["id_ed25519_sk", "id_ecdsa_sk"];
+
+/// Which default names a scan may pick, decided by the caller from the
+/// host's auth method and whether this build can drive a token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskKeyWanted {
+    /// Software keys only: no native token signing on this platform.
+    Software,
+    /// Software keys first, then security keys.
+    SoftwareThenSecurityKey,
+    /// Security keys only: `AuthMethod::SecurityKey`, where a software key
+    /// is exactly the credential the method exists to refuse.
+    SecurityKey,
+}
+
+impl DiskKeyWanted {
+    fn names(self) -> impl Iterator<Item = &'static str> {
+        let (software, security): (&[&str], &[&str]) = match self {
+            Self::Software => (SOFTWARE_KEY_NAMES, &[]),
+            Self::SoftwareThenSecurityKey => (SOFTWARE_KEY_NAMES, SECURITY_KEY_NAMES),
+            Self::SecurityKey => (&[], SECURITY_KEY_NAMES),
+        };
+        software.iter().chain(security).copied()
+    }
+}
 
 /// What the disk source resolved to for one host. Every variant except
 /// `Ready` is a reason the host editor can show, which is the point:
@@ -126,9 +151,14 @@ pub enum DiskKeyStatus {
 /// Resolve the disk key for a host.
 ///
 /// `identity_file` wins over the scan (typing a path IS the choice of
-/// which key), and `use_disk_key` gates both: a host that never opted in
-/// offers nothing from disk, however many keys sit in `~/.ssh`.
-pub fn resolve_disk_key(use_disk_key: bool, identity_file: Option<&str>) -> DiskKey {
+/// which key, so `wanted` does not filter it), and `use_disk_key` gates
+/// both: a host that never opted in offers nothing from disk, however
+/// many keys sit in `~/.ssh`.
+pub fn resolve_disk_key(
+    use_disk_key: bool,
+    identity_file: Option<&str>,
+    wanted: DiskKeyWanted,
+) -> DiskKey {
     if !use_disk_key {
         return DiskKey::Off;
     }
@@ -136,7 +166,7 @@ pub fn resolve_disk_key(use_disk_key: bool, identity_file: Option<&str>) -> Disk
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .map(expand_tilde);
-    resolve_paths(explicit.as_deref(), ssh_dir().as_deref())
+    resolve_paths(explicit.as_deref(), ssh_dir().as_deref(), wanted)
 }
 
 /// The user's own home, from the environment rather than through
@@ -175,7 +205,7 @@ fn expand_tilde(path: &str) -> PathBuf {
 
 /// The resolution itself, over paths already expanded, so tests drive it
 /// with a temp directory instead of the machine's real home.
-fn resolve_paths(explicit: Option<&Path>, ssh_dir: Option<&Path>) -> DiskKey {
+fn resolve_paths(explicit: Option<&Path>, ssh_dir: Option<&Path>, wanted: DiskKeyWanted) -> DiskKey {
     if let Some(path) = explicit {
         return match std::fs::read_to_string(path) {
             Ok(text) => classify(path, &text),
@@ -190,7 +220,7 @@ fn resolve_paths(explicit: Option<&Path>, ssh_dir: Option<&Path>) -> DiskKey {
     // The first problem is kept so "nothing worked" can still say what
     // was in the way instead of reporting an empty directory.
     let mut first_problem: Option<DiskKey> = None;
-    for name in DEFAULT_KEY_NAMES {
+    for name in wanted.names() {
         let path = dir.join(name);
         // An unreadable default is skipped silently: unlike an explicit
         // path, nobody asked for this particular file.
@@ -257,6 +287,22 @@ fn display_path(path: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// The scan most hosts run: software keys, then security keys.
+    const ANY: DiskKeyWanted = DiskKeyWanted::SoftwareThenSecurityKey;
+
+    /// An `id_ed25519_sk` file: a token handle, not a scalar.
+    fn sk_pem() -> String {
+        use ssh_key::private::{KeypairData, SkEd25519};
+        use ssh_key::public::{Ed25519PublicKey, SkEd25519 as SkPublic};
+        let public = SkPublic::new(Ed25519PublicKey([7; 32]), "ssh:");
+        let keypair = SkEd25519::new(public, 0x01, vec![1, 2, 3]).unwrap();
+        ssh_key::PrivateKey::new(KeypairData::SkEd25519(keypair), "t")
+            .unwrap()
+            .to_openssh(ssh_key::LineEnding::LF)
+            .unwrap()
+            .to_string()
+    }
+
     /// A usable Ed25519 private key, as it would sit on disk.
     fn plain_pem() -> String {
         super::super::generate_ed25519("test").unwrap().private_pem
@@ -300,9 +346,9 @@ mod tests {
         let key = write(dir.path(), "id_ed25519", &plain_pem());
         // The gate is checked before anything is read: a usable key at a
         // named path still resolves to nothing.
-        assert!(matches!(resolve_disk_key(false, None), DiskKey::Off));
+        assert!(matches!(resolve_disk_key(false, None, ANY), DiskKey::Off));
         assert!(matches!(
-            resolve_disk_key(false, Some(&key.display().to_string())),
+            resolve_disk_key(false, Some(&key.display().to_string()), ANY),
             DiskKey::Off
         ));
     }
@@ -312,7 +358,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "id_ed25519", &plain_pem());
         let named = write(dir.path(), "work_key", &plain_pem());
-        match resolve_paths(Some(&named), Some(dir.path())) {
+        match resolve_paths(Some(&named), Some(dir.path()), ANY) {
             DiskKey::Ready { path, .. } => assert_eq!(path, named),
             other => panic!("expected the named key, got {other:?}"),
         }
@@ -326,7 +372,7 @@ mod tests {
         // key is exactly the surprise this source exists to remove.
         let missing = dir.path().join("nope");
         assert!(matches!(
-            resolve_paths(Some(&missing), Some(dir.path())),
+            resolve_paths(Some(&missing), Some(dir.path()), ANY),
             DiskKey::Unreadable(p, _) if p == missing
         ));
     }
@@ -338,7 +384,7 @@ mod tests {
         // not which algorithm parses.
         write(dir.path(), "id_rsa", &plain_pem());
         let preferred = write(dir.path(), "id_ed25519", &plain_pem());
-        match resolve_paths(None, Some(dir.path())) {
+        match resolve_paths(None, Some(dir.path()), ANY) {
             DiskKey::Ready { path, .. } => assert_eq!(path, preferred),
             other => panic!("expected the ed25519 name first, got {other:?}"),
         }
@@ -348,12 +394,12 @@ mod tests {
     fn a_passphrase_protected_key_is_reported_never_offered() {
         let dir = tempfile::tempdir().unwrap();
         let locked = write(dir.path(), "id_ed25519", &encrypted_pem());
-        match resolve_paths(Some(&locked), None) {
+        match resolve_paths(Some(&locked), None, ANY) {
             DiskKey::Encrypted(p) => assert_eq!(p, locked),
             other => panic!("expected Encrypted, got {other:?}"),
         }
         // And nothing about it reaches the engine.
-        assert!(resolve_paths(Some(&locked), None).material().is_none());
+        assert!(resolve_paths(Some(&locked), None, ANY).material().is_none());
     }
 
     #[test]
@@ -363,7 +409,7 @@ mod tests {
         // keep going rather than report the directory as locked.
         write(dir.path(), "id_ed25519", &encrypted_pem());
         let usable = write(dir.path(), "id_rsa", &plain_pem());
-        match resolve_paths(None, Some(dir.path())) {
+        match resolve_paths(None, Some(dir.path()), ANY) {
             DiskKey::Ready { path, .. } => assert_eq!(path, usable),
             other => panic!("expected the plain key, got {other:?}"),
         }
@@ -376,7 +422,7 @@ mod tests {
         // Nothing usable anywhere, so the answer is the obstacle rather
         // than "no key found", which would send the user looking for a
         // file that is sitting right there.
-        match resolve_paths(None, Some(dir.path())) {
+        match resolve_paths(None, Some(dir.path()), ANY) {
             DiskKey::Encrypted(p) => assert_eq!(p, locked),
             other => panic!("expected Encrypted, got {other:?}"),
         }
@@ -391,7 +437,7 @@ mod tests {
             "ssh-ed25519 AAAAC3Nz not-a-private-key\n",
         );
         assert!(matches!(
-            resolve_paths(Some(&junk), None),
+            resolve_paths(Some(&junk), None, ANY),
             DiskKey::Unusable(p, _) if p == junk
         ));
     }
@@ -400,11 +446,11 @@ mod tests {
     fn an_empty_ssh_dir_finds_nothing() {
         let dir = tempfile::tempdir().unwrap();
         assert!(matches!(
-            resolve_paths(None, Some(dir.path())),
+            resolve_paths(None, Some(dir.path()), ANY),
             DiskKey::NotFound
         ));
         // No home to scan is the same answer, never an error.
-        assert!(matches!(resolve_paths(None, None), DiskKey::NotFound));
+        assert!(matches!(resolve_paths(None, None, ANY), DiskKey::NotFound));
     }
 
     #[test]
@@ -414,7 +460,7 @@ mod tests {
         // `import_key` is what makes the source format-agnostic; the PEM
         // handed over is its normalized output, not the raw bytes, which
         // is why a PPK or a legacy PEM works here too.
-        match resolve_paths(Some(&path), None) {
+        match resolve_paths(Some(&path), None, ANY) {
             DiskKey::Ready {
                 pem, certificate, ..
             } => {
@@ -438,7 +484,7 @@ mod tests {
         // OpenSSH's implicit lookup, and the only reason
         // `AuthMethod::Certificate` can work off disk: that method
         // offers the certificate and nothing else.
-        match resolve_paths(Some(&path), None) {
+        match resolve_paths(Some(&path), None, ANY) {
             DiskKey::Ready { certificate, .. } => {
                 assert_eq!(certificate.as_deref(), Some(cert.trim()));
             }
@@ -453,7 +499,7 @@ mod tests {
         write(dir.path(), "id_ed25519-cert.pub", "not a certificate\n");
         // A stray same-named file must not poison the offer: the key
         // still authenticates, just without a certificate.
-        match resolve_paths(Some(&path), None) {
+        match resolve_paths(Some(&path), None, ANY) {
             DiskKey::Ready { certificate, .. } => assert!(certificate.is_none()),
             other => panic!("expected Ready, got {other:?}"),
         }
@@ -463,7 +509,7 @@ mod tests {
     fn the_status_carries_the_path_and_not_the_key() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "id_ed25519", &plain_pem());
-        let resolved = resolve_paths(Some(&path), None);
+        let resolved = resolve_paths(Some(&path), None, ANY);
         let pem = match &resolved {
             DiskKey::Ready { pem, .. } => pem.clone(),
             other => panic!("expected Ready, got {other:?}"),
@@ -479,6 +525,47 @@ mod tests {
                 assert!(!certificate, "no sibling cert was written");
             }
             other => panic!("expected Ready status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_security_key_file_never_shadows_a_software_key() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "id_ed25519_sk", &sk_pem());
+        let software = write(dir.path(), "id_rsa", &plain_pem());
+        match resolve_paths(None, Some(dir.path()), ANY) {
+            DiskKey::Ready { path, .. } => assert_eq!(path, software),
+            other => panic!("expected the software key, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_security_key_file_is_the_fallback_where_tokens_are_driven() {
+        let dir = tempfile::tempdir().unwrap();
+        let sk = write(dir.path(), "id_ed25519_sk", &sk_pem());
+        match resolve_paths(None, Some(dir.path()), ANY) {
+            DiskKey::Ready { path, .. } => assert_eq!(path, sk),
+            other => panic!("expected the security key, got {other:?}"),
+        }
+        // Where nothing can drive a token, the file is not offered at all.
+        assert!(matches!(
+            resolve_paths(None, Some(dir.path()), DiskKeyWanted::Software),
+            DiskKey::NotFound
+        ));
+    }
+
+    #[test]
+    fn a_security_key_host_scans_only_security_key_files() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "id_ed25519", &plain_pem());
+        assert!(matches!(
+            resolve_paths(None, Some(dir.path()), DiskKeyWanted::SecurityKey),
+            DiskKey::NotFound
+        ));
+        let sk = write(dir.path(), "id_ecdsa_sk", &sk_pem());
+        match resolve_paths(None, Some(dir.path()), DiskKeyWanted::SecurityKey) {
+            DiskKey::Ready { path, .. } => assert_eq!(path, sk),
+            other => panic!("expected the security key, got {other:?}"),
         }
     }
 }

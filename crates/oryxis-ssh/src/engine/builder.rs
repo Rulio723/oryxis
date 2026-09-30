@@ -40,6 +40,9 @@ impl SshEngine {
             banner_tx: None,
             proxy_output_tx: None,
             attended: false,
+            // Fail-closed, like the proxy consent: no touch prompt unless
+            // an attended dial site asks for one.
+            security_key_prompts: None,
             pinned_agent_key: None,
         }
     }
@@ -172,6 +175,21 @@ impl SshEngine {
     /// See `with_attended`.
     pub(crate) fn is_attended(&self) -> bool {
         self.attended
+    }
+
+    /// Allow this dial to sign with a security key, which means asking a
+    /// person to touch it (and, for a `verify-required` key, for its PIN,
+    /// through the `with_kbi_ask` bridge).
+    ///
+    /// Default is refusal ([`crate::SkError::Unattended`]): a touch is a
+    /// consent, and a prompt raised by a dial nobody started trains
+    /// people to touch whatever asks. So only the dial sites a person
+    /// drives (a terminal tab, an in-place pane, a forward or remote
+    /// desktop the user just started) pass this; MCP, boot forwards, the
+    /// monitor and sync never do.
+    pub fn with_security_key_prompts(mut self, prompts: crate::sk::SecurityKeyPrompts) -> Self {
+        self.security_key_prompts = Some(prompts);
+        self
     }
 
     pub fn with_strict_host_key(mut self, enabled: bool) -> Self {

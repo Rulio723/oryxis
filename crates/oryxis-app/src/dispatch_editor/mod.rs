@@ -316,13 +316,16 @@ impl Oryxis {
     /// then every saved key's label. Under `AuthMethod::Certificate`
     /// (B2.1) only keys carrying a certificate are listed, the method
     /// offers the cert and nothing else, so a bare key is never a valid
-    /// pick there. Under `Agent` (B3) every key qualifies (the pick is
-    /// the preferred agent identity) with security keys sorted first,
-    /// they are the reason the pin exists.
+    /// pick there. Under `AuthMethod::SecurityKey` only hardware keys
+    /// are listed, for the same reason in the other direction. Under
+    /// `Agent` (B3) every key qualifies (the pick is the preferred agent
+    /// identity) with security keys sorted first, they are the reason
+    /// the pin exists.
     fn editor_key_options(&self) -> Vec<String> {
         use oryxis_core::models::connection::AuthMethod;
         let filter = match self.editor_form.auth_method {
             AuthMethod::Certificate => KeyComboFilter::CertificateOnly,
+            AuthMethod::SecurityKey => KeyComboFilter::SecurityKeyOnly,
             AuthMethod::Agent => KeyComboFilter::SecurityKeysFirst,
             _ => KeyComboFilter::All,
         };
@@ -978,6 +981,7 @@ impl Oryxis {
             disk_key_status: oryxis_vault::resolve_disk_key(
                 conn.use_disk_key,
                 conn.identity_file.as_deref(),
+                crate::connect_methods::disk_key_wanted(&conn.auth_method),
             )
             .status(),
             terminal_theme: conn.terminal_theme.clone(),
@@ -1239,14 +1243,20 @@ enum KeyComboFilter {
     /// Every key, security keys first (the `Agent` method's preferred-
     /// identity pick, B3).
     SecurityKeysFirst,
+    /// Only security keys (the `SecurityKey` method): the hardware-only
+    /// mode offers the token and nothing else, so a software key in this
+    /// list could only ever be a pick that fails at connect time.
+    SecurityKeyOnly,
 }
 
 /// Option list for the host editor's SSH Key combo, pure so it
 /// unit-tests: the `(none)` sentinel first, then the key labels per
-/// the filter. `Key` and `Certificate` both decode the private key
-/// locally to sign, so they only list rows that HOLD a private
-/// (`has_private`); a security-key / public-only row belongs under
-/// `Agent`, where the hardware token signs.
+/// the filter. `Key`, `Certificate` and `SecurityKey` all sign with the
+/// selected key, so they only list rows that HOLD usable material
+/// (`has_private`), which for a security key means the row carries the
+/// FIDO2 credential handle, not just the public half. A public-only
+/// security-key row (a B3 import) belongs under `Agent`, where an
+/// external agent owns the token.
 fn key_combo_options(
     keys: &[oryxis_core::models::key::SshKey],
     filter: KeyComboFilter,
@@ -1261,6 +1271,11 @@ fn key_combo_options(
         KeyComboFilter::CertificateOnly => opts.extend(
             keys.iter()
                 .filter(|k| k.certificate.is_some() && k.has_private)
+                .map(|k| k.label.clone()),
+        ),
+        KeyComboFilter::SecurityKeyOnly => opts.extend(
+            keys.iter()
+                .filter(|k| k.algorithm.is_security_key() && k.has_private)
                 .map(|k| k.label.clone()),
         ),
         KeyComboFilter::SecurityKeysFirst => {
@@ -1378,9 +1393,20 @@ mod key_combo_tests {
         k
     }
 
-    // A security key is public-only (has_private = false).
+    // A security key is public-only (has_private = false) when it came
+    // from a `.pub` line: the vault holds the public half and an external
+    // agent owns the token.
     fn sk(label: &str) -> SshKey {
         SshKey::new(label, KeyAlgorithm::SkEd25519)
+    }
+
+    // A security key that was imported from its `id_ed25519_sk` file:
+    // the stored "private" is the FIDO2 credential handle, so the app
+    // can sign with it natively.
+    fn sk_handle(label: &str) -> SshKey {
+        let mut k = SshKey::new(label, KeyAlgorithm::SkEd25519);
+        k.has_private = true;
+        k
     }
 
     #[test]
@@ -1400,6 +1426,46 @@ mod key_combo_tests {
         assert_eq!(
             key_combo_options(&keys, KeyComboFilter::All),
             vec!["(none)", "bare"]
+        );
+    }
+
+    #[test]
+    fn key_mode_lists_a_hardware_key_that_carries_its_handle() {
+        // The other half of the rule above: a security key imported from
+        // its `id_ed25519_sk` file signs natively, so `Key` is a valid
+        // method for it and it belongs in the list.
+        let keys = vec![key("bare", false), sk("yubi-pub"), sk_handle("yubi-native")];
+        assert_eq!(
+            key_combo_options(&keys, KeyComboFilter::All),
+            vec!["(none)", "bare", "yubi-native"]
+        );
+    }
+
+    #[test]
+    fn security_key_mode_lists_only_hardware_keys_with_a_handle() {
+        // Both exclusions matter: a software key cannot satisfy a
+        // hardware-only method, and a public-only security-key row has no
+        // handle to sign with, so neither may be offered here.
+        let keys = vec![
+            key("bare", false),
+            sk("yubi-pub"),
+            sk_handle("yubi-native"),
+            key("certified", true),
+        ];
+        assert_eq!(
+            key_combo_options(&keys, KeyComboFilter::SecurityKeyOnly),
+            vec!["(none)", "yubi-native"]
+        );
+    }
+
+    #[test]
+    fn security_key_mode_with_nothing_usable_keeps_the_sentinel_only() {
+        // The editor shows an import hint on this state, so an empty list
+        // has to be reachable rather than padded with something unusable.
+        let keys = vec![key("bare", false), sk("yubi-pub")];
+        assert_eq!(
+            key_combo_options(&keys, KeyComboFilter::SecurityKeyOnly),
+            vec!["(none)"]
         );
     }
 

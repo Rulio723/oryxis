@@ -2300,6 +2300,16 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "ボールト内に証明書が添付された鍵はまだありません。",
         "cert_key_no_cert_hint" => "選択した鍵には証明書が添付されていません。",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "セキュリティキー",
+        "security_key_help" => "このハードウェアキーのみを使用し、エージェント、他のキー、パスワードへのフォールバックは行いません。キーがないかタッチが拒否されると接続は失敗します。",
+        "security_key_none_imported" => "保管庫にセキュリティキーがありません。ssh-keygen が作成した id_ed25519_sk / id_ecdsa_sk ファイルをインポートしてください。",
+        "sk_pin_title" => "セキュリティキーの PIN",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "PIN が違います。キーがロックされるまで残り {n} 回です。",
+        "sk_touch_notice" => "続行するにはセキュリティキーにタッチしてください",
+        "sk_verify_notice" => "続行するにはセキュリティキーで確認してください（PIN または指紋）",
+        "security_key_unsupported_platform" => "このプラットフォームはまだセキュリティキーで署名できません（Windows、macOS と Linux は対応）。キーを保持する ssh-agent で「エージェント」方式を使ってください。",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "公開鍵をインポート",
         "key_badge_security_key" => "セキュリティキー",

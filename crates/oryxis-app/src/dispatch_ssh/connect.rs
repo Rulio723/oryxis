@@ -31,6 +31,8 @@ enum PaneConnMsg {
     Banner(String),
     /// A line a command proxy printed while the dial is pending.
     ProxyOutput(oryxis_ssh::ProxyOutputLine),
+    /// A security key waiting on a person.
+    SecurityKey(oryxis_ssh::SecurityKeyNotice),
     Connected(Arc<SshSession>),
     Data(Vec<u8>),
     Disconnected,
@@ -427,6 +429,10 @@ impl Oryxis {
                 // (issue #223): its login instructions land on the card.
                 let (proxy_out_tx, mut proxy_out_rx) =
                     tokio::sync::mpsc::unbounded_channel::<oryxis_ssh::ProxyOutputLine>();
+                // "Touch your key" while a security key waits on a person,
+                // as a line on the card's timeline.
+                let (sk_notice_tx, mut sk_notice_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<oryxis_ssh::SecurityKeyNotice>();
                 self.kbi_response_tx = Some(kbi_resp_tx);
 
                 let conn_host = conn.hostname.clone();
@@ -469,6 +475,9 @@ impl Oryxis {
                         "keyboard-interactive"
                     }
                     oryxis_core::models::connection::AuthMethod::Certificate => "certificate",
+                    oryxis_core::models::connection::AuthMethod::SecurityKey => {
+                        "hardware security key"
+                    }
                 }
                 .to_string();
                 let keepalive = self.effective_keepalive(&conn);
@@ -626,8 +635,26 @@ impl Oryxis {
                             // The card shows the proxy's words and Close
                             // aborts this task: a login may run long.
                             .with_attended(true)
+                            // A person started this dial and is looking at
+                            // its card: it may ask them to touch a key.
+                            .with_security_key_prompts(
+                                crate::connect_methods::security_key_prompts(Some(sk_notice_tx)),
+                            )
                             .with_pinned_agent_key(pinned_agent.as_deref())
                         .with_auto_interactive_fallback(is_quick);
+
+                        let mut sk_notice_sender = sender.clone();
+                        let _sk_notice_bridge = tokio::spawn(async move {
+                            while let Some(notice) = sk_notice_rx.recv().await {
+                                let text = crate::connect_methods::security_key_notice_text(notice);
+                                let _ = sk_notice_sender
+                                    .send(SshStreamMsg::Progress(
+                                        ConnectionStep::Authenticating,
+                                        text.to_string(),
+                                    ))
+                                    .await;
+                            }
+                        });
 
                         // One-way banner bridge (no response leg): pre-auth
                         // banners surface on the progress card + terminal.
@@ -1374,7 +1401,8 @@ impl Oryxis {
             | PaneConnMsg::ProxyCommand(_)
             | PaneConnMsg::Kbi(_)
             | PaneConnMsg::Banner(_)
-            | PaneConnMsg::ProxyOutput(_) => Message::NoOp,
+            | PaneConnMsg::ProxyOutput(_)
+            | PaneConnMsg::SecurityKey(_) => Message::NoOp,
         })
     }
 
@@ -1568,6 +1596,9 @@ impl Oryxis {
         // written into the pane as dim marker lines.
         let (proxy_out_tx, mut proxy_out_rx) =
             tokio::sync::mpsc::unbounded_channel::<oryxis_ssh::ProxyOutputLine>();
+        // "Touch your key", written into the pane like the proxy's lines.
+        let (sk_notice_tx, mut sk_notice_rx) =
+            tokio::sync::mpsc::unbounded_channel::<oryxis_ssh::SecurityKeyNotice>();
 
         let stream = iced::stream::channel::<PaneConnMsg>(128, move |mut sender: iced::futures::channel::mpsc::Sender<PaneConnMsg>| async move {
             let engine = SshEngine::new()
@@ -1594,8 +1625,18 @@ impl Oryxis {
                 // The pane shows the proxy's words, and closing or
                 // restarting the pane aborts this task (`Pane::dial_task`).
                 .with_attended(true)
+                .with_security_key_prompts(crate::connect_methods::security_key_prompts(Some(
+                    sk_notice_tx,
+                )))
                 .with_pinned_agent_key(pinned_agent.as_deref())
                 .with_auto_interactive_fallback(is_quick);
+
+            let mut sk_notice_sender = sender.clone();
+            let _sk_notice_bridge = tokio::spawn(async move {
+                while let Some(notice) = sk_notice_rx.recv().await {
+                    let _ = sk_notice_sender.send(PaneConnMsg::SecurityKey(notice)).await;
+                }
+            });
 
             let mut proxy_out_sender = sender.clone();
             let _proxy_out_bridge = tokio::spawn(async move {
@@ -1678,6 +1719,9 @@ impl Oryxis {
             PaneConnMsg::ProxyOutput(line) => {
                 Message::Ssh(SshMessage::SshPaneProxyOutput(pane_id, line))
             }
+            PaneConnMsg::SecurityKey(notice) => {
+                Message::Ssh(SshMessage::SshPaneSecurityKey(pane_id, notice))
+            }
             PaneConnMsg::Connected(s) => {
                 Message::Ssh(SshMessage::SshConnected(pane_id, crate::state::TerminalTransport::Ssh(s)))
             }
@@ -1709,8 +1753,12 @@ impl Oryxis {
 /// the editor hint can never say different things about one file.
 pub(crate) fn disk_key_hint(conn: &oryxis_core::models::Connection) -> Option<String> {
     use oryxis_vault::DiskKeyStatus as St;
-    let status =
-        oryxis_vault::resolve_disk_key(conn.use_disk_key, conn.identity_file.as_deref()).status();
+    let status = oryxis_vault::resolve_disk_key(
+        conn.use_disk_key,
+        conn.identity_file.as_deref(),
+        crate::connect_methods::disk_key_wanted(&conn.auth_method),
+    )
+    .status();
     match status {
         // Not opted in, or it worked: the failure is about something
         // else and a line about keys would only mislead.

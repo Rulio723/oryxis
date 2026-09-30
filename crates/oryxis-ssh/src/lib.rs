@@ -2,6 +2,7 @@ pub mod algorithms;
 pub mod engine;
 pub mod sftp;
 pub mod sftp_shell;
+pub mod sk;
 pub mod x11;
 
 #[cfg(test)]
@@ -16,4 +17,5 @@ pub use sftp::{
     resume_offset, AttrUpdate, FsInfo, RemoteRangedFile, RemoteStat, SftpClient, SftpEntry,
     UploadOptions,
 };
+pub use sk::{SecurityKeyNotice, SecurityKeyPrompts, SkAlgorithm, SkCredential, SkError, SkSigner};
 pub use x11::{X11Forwarding, X11Target};

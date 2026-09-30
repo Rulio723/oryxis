@@ -2319,6 +2319,16 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "هنوز هیچ کلیدی در صندوقچه گواهی پیوست‌شده ندارد.",
         "cert_key_no_cert_hint" => "کلید انتخاب‌شده گواهی پیوست‌شده ندارد.",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "کلید امنیتی",
+        "security_key_help" => "فقط همین کلید سخت‌افزاری ارائه می‌شود؛ بدون عامل، کلید دیگر یا بازگشت به گذرواژه. اگر کلید موجود نباشد یا لمس رد شود، اتصال ناموفق خواهد بود.",
+        "security_key_none_imported" => "هنوز کلید امنیتی در خزانه نیست. فایل id_ed25519_sk / id_ecdsa_sk ساخته‌شده با ssh-keygen را وارد کنید.",
+        "sk_pin_title" => "PIN کلید امنیتی",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "PIN نادرست است. {n} تلاش تا قفل شدن کلید باقی مانده است.",
+        "sk_touch_notice" => "برای ادامه کلید امنیتی خود را لمس کنید",
+        "sk_verify_notice" => "برای ادامه روی کلید امنیتی تأیید کنید (PIN یا اثر انگشت)",
+        "security_key_unsupported_platform" => "این سکو هنوز نمی‌تواند با کلید امنیتی امضا کند (Windows، macOS و Linux می‌توانند). از روش Agent با یک ssh-agent که کلید را دارد استفاده کنید.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "وارد کردن کلید عمومی",
         "key_badge_security_key" => "کلید امنیتی",

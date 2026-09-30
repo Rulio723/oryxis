@@ -12,6 +12,17 @@ pub(crate) fn effective_username(connection: &Connection) -> &str {
     connection.username.as_deref().unwrap_or("root")
 }
 
+/// A security-key failure as the engine reports it. A dead SSH transport
+/// is a connection failure; everything else (no token, a declined touch,
+/// a wrong PIN, an unattended dial) is a credential problem the person
+/// can act on, and keeps the token layer's message.
+fn security_key_error(error: crate::sk::SkError) -> SshError {
+    match error {
+        crate::sk::SkError::TransportClosed(message) => SshError::ConnectionFailed(message),
+        other => SshError::Key(other.to_string()),
+    }
+}
+
 impl SshEngine {
     // -----------------------------------------------------------------------
     // Authentication
@@ -308,6 +319,27 @@ impl SshEngine {
                     SshError::Key("The selected key has no attached certificate".into())
                 })?;
 
+                // A certificate over a security key: the token signs, the
+                // strictness is the same.
+                if let Some(credential) = self.security_key_credential(km)? {
+                    tracing::info!("Trying security-key certificate auth for {}", username);
+                    return match self
+                        .try_security_key_auth(handle, username, credential, Some(cert_line), true)
+                        .await?
+                    {
+                        StepVerdict::Accepted => Ok(true),
+                        StepVerdict::Partial(remaining) => {
+                            self.finish_partial_auth(
+                                handle, username, remaining, None, password, password,
+                            )
+                            .await
+                        }
+                        StepVerdict::Rejected => {
+                            Err(SshError::Key("Certificate rejected by server".into()))
+                        }
+                    };
+                }
+
                 let private_key = russh::keys::decode_secret_key(km.private_pem, None)
                     .map_err(|e| SshError::Key(format!("Failed to decode key: {}", e)))?;
                 let private_key = Arc::new(private_key);
@@ -316,7 +348,7 @@ impl SshEngine {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let cert = match check_certificate(cert_line, &private_key, now) {
+                let cert = match check_certificate(cert_line, private_key.public_key().key_data(), now) {
                     CertCheck::Unusable(why) => {
                         return Err(SshError::Key(format!("Certificate unusable: {}", why)));
                     }
@@ -346,6 +378,43 @@ impl SshEngine {
                     StepVerdict::Rejected => {
                         Err(SshError::Key("Certificate rejected by server".into()))
                     }
+                }
+            }
+            AuthMethod::SecurityKey => {
+                // The selected hardware key and nothing else: no agent
+                // sweep, no other key, no password standing in for it. A
+                // missing token, a declined touch or a refusal is a hard
+                // error, because every other method could end up
+                // authenticating with something that is not the token.
+                let km = key_material.ok_or_else(|| {
+                    SshError::Key("No security key selected for this host".into())
+                })?;
+                let credential = self.security_key_credential(km)?.ok_or_else(|| {
+                    SshError::Key(
+                        "The selected key is not a security key; pick an Ed25519-SK or \
+                         ECDSA-SK key imported from its id_*_sk file"
+                            .into(),
+                    )
+                })?;
+                tracing::info!("Trying security-key auth for {}", username);
+                match self
+                    .try_security_key_auth(handle, username, credential, km.certificate, false)
+                    .await?
+                {
+                    StepVerdict::Accepted => Ok(true),
+                    // The token was accepted and the server wants a second
+                    // factor ON TOP (issue #125). Answering it adds to the
+                    // token rather than replacing it, so it is not the
+                    // weakening this mode exists to prevent.
+                    StepVerdict::Partial(remaining) => {
+                        self.finish_partial_auth(
+                            handle, username, remaining, None, password, password,
+                        )
+                        .await
+                    }
+                    StepVerdict::Rejected => Err(SshError::Key(
+                        "The security key was rejected by the server".into(),
+                    )),
                 }
             }
             AuthMethod::Agent => {
@@ -658,6 +727,16 @@ impl SshEngine {
         username: &str,
         material: KeyMaterial<'_>,
     ) -> Result<StepVerdict, SshError> {
+        // A security-key file parses as a private key too (its "private"
+        // body is a token handle), so it is told apart BEFORE the decode:
+        // this is what makes `Key` and `Auto` work with a token, and what
+        // keeps a handle out of every software signing path.
+        if let Some(credential) = self.security_key_credential(material)? {
+            return self
+                .try_security_key_auth(handle, username, credential, material.certificate, false)
+                .await;
+        }
+
         let private_key = russh::keys::decode_secret_key(material.private_pem, None)
             .map_err(|e| SshError::Key(format!("Failed to decode key: {}", e)))?;
         let private_key = Arc::new(private_key);
@@ -700,6 +779,137 @@ impl SshEngine {
         Ok(res.into())
     }
 
+    /// The security-key credential in this material, when it is one.
+    /// `Ok(None)` is an ordinary private key, for the software path.
+    fn security_key_credential(
+        &self,
+        material: KeyMaterial<'_>,
+    ) -> Result<Option<crate::sk::SkCredential>, SshError> {
+        match crate::sk::SkCredential::from_openssh_private(material.private_pem) {
+            Ok(credential) => Ok(Some(credential)),
+            Err(crate::sk::SkError::NotASecurityKey(_)) => Ok(None),
+            // A passphrase-protected handle: a real error, and never a
+            // slide into software signing.
+            Err(e) => Err(security_key_error(e)),
+        }
+    }
+
+    /// Offer a security key (and its certificate, when one is attached),
+    /// with the token doing the signing through `russh`'s external-signer
+    /// hook, the one the agent path uses.
+    ///
+    /// `strict_cert` is `AuthMethod::Certificate`: an unusable or refused
+    /// certificate is the answer. Otherwise a refused certificate degrades
+    /// to the bare key, the software path's rule.
+    async fn try_security_key_auth(
+        &self,
+        handle: &mut client::Handle<ClientHandler>,
+        username: &str,
+        credential: crate::sk::SkCredential,
+        certificate: Option<&str>,
+        strict_cert: bool,
+    ) -> Result<StepVerdict, SshError> {
+        let interaction = self.security_key_interaction()?;
+        let public_key = credential.public_key().clone();
+        let mut signer =
+            crate::sk::SkSigner::new(credential, oryxis_fido2::platform_authenticator())
+                .with_interaction(interaction);
+
+        if let Some(cert_line) = certificate {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            match check_certificate(cert_line, public_key.key_data(), now) {
+                CertCheck::Unusable(why) if strict_cert => {
+                    return Err(SshError::Key(format!("Certificate unusable: {}", why)));
+                }
+                CertCheck::Unusable(why) => {
+                    tracing::warn!("Attached certificate unusable ({why}); using bare key");
+                }
+                CertCheck::Offer { cert, expired } => {
+                    if expired {
+                        // Advisory only: the server's clock is authoritative.
+                        tracing::warn!(
+                            "Certificate for {} is expired; offering anyway",
+                            username,
+                        );
+                    }
+                    let res = handle
+                        .authenticate_certificate_with(username, *cert, None, &mut signer)
+                        .await
+                        .map_err(security_key_error)?;
+                    match StepVerdict::from(res) {
+                        v @ (StepVerdict::Accepted | StepVerdict::Partial(_)) => return Ok(v),
+                        StepVerdict::Rejected if strict_cert => return Ok(StepVerdict::Rejected),
+                        StepVerdict::Rejected => {
+                            tracing::info!("Falling back to bare security key for {}", username);
+                        }
+                    }
+                }
+            }
+        }
+
+        let res = handle
+            .authenticate_publickey_with(username, public_key, None, &mut signer)
+            .await
+            .map_err(security_key_error)?;
+        Ok(res.into())
+    }
+
+    /// What a token request needs from the person driving this dial, or
+    /// the refusal when nobody is. The PIN rides the keyboard-interactive
+    /// bridge, answered from the token's blocking thread.
+    pub(crate) fn security_key_interaction(&self) -> Result<oryxis_fido2::Interaction, SshError> {
+        let prompts = self
+            .security_key_prompts
+            .clone()
+            .ok_or_else(|| security_key_error(crate::sk::SkError::Unattended))?;
+
+        let events = prompts.notices.clone().map(|tx| {
+            std::sync::Arc::new(move |event: oryxis_fido2::TokenEvent| {
+                let _ = tx.send(match event {
+                    oryxis_fido2::TokenEvent::TouchNeeded => crate::sk::SecurityKeyNotice::Touch,
+                    oryxis_fido2::TokenEvent::VerificationNeeded => {
+                        crate::sk::SecurityKeyNotice::Verify
+                    }
+                });
+            }) as std::sync::Arc<dyn Fn(oryxis_fido2::TokenEvent) + Send + Sync>
+        });
+
+        let pin = self.kbi_ask_tx.clone().map(|tx| {
+            std::sync::Arc::new(move |prompt: oryxis_fido2::PinPrompt| {
+                let instructions = match (prompt.retry, prompt.retries) {
+                    (true, Some(n)) => prompts.pin_retry.replace("{n}", &n.to_string()),
+                    (true, None) => prompts.pin_retry.replace("{n}", "?"),
+                    (false, _) => String::new(),
+                };
+                let query = KbiQuery {
+                    name: prompts.pin_title.clone(),
+                    instructions,
+                    prompts: vec![KbiPromptField {
+                        prompt: prompts.pin_label.clone(),
+                        echo: false,
+                    }],
+                };
+                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                // On the token's blocking thread, so blocking is allowed.
+                tx.blocking_send((query, resp_tx)).ok()?;
+                let answers = resp_rx.blocking_recv().ok()??;
+                answers
+                    .into_iter()
+                    .next()
+                    .map(zeroize::Zeroizing::new)
+            }) as oryxis_fido2::PinSource
+        });
+
+        Ok(oryxis_fido2::Interaction {
+            cancel: oryxis_fido2::CancelToken::new(),
+            events,
+            pin,
+        })
+    }
+
     /// Offer an OpenSSH certificate during publickey auth. Returns:
     /// - `Ok(Some(verdict))` the offer reached the server (accepted,
     ///   rejected, or accepted-partially per RFC 4252);
@@ -720,7 +930,7 @@ impl SshEngine {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let cert = match check_certificate(cert_line, private_key, now) {
+        let cert = match check_certificate(cert_line, private_key.public_key().key_data(), now) {
             CertCheck::Unusable(why) => {
                 tracing::warn!("Attached certificate unusable ({why}); using bare key");
                 return Ok(None);
@@ -1374,20 +1584,22 @@ enum CertCheck {
     Unusable(&'static str),
 }
 
-/// Validate `cert_line` against `private_key` at wall-clock `now_unix`
-/// (0 = unknown, skips the expiry check). Never fails: a bad cert is a
-/// `Unusable`, so the auth path can always degrade to the plain key.
+/// Validate `cert_line` against the key's `public_key` at wall-clock
+/// `now_unix` (0 = unknown, skips the expiry check). Never fails: a bad
+/// cert is a `Unusable`, so the auth path can always degrade to the plain
+/// key. The PUBLIC half is what it takes, because a security key has no
+/// private half to hand over and the same check serves both.
 fn check_certificate(
     cert_line: &str,
-    private_key: &russh::keys::PrivateKey,
+    public_key: &russh::keys::ssh_key::public::KeyData,
     now_unix: u64,
 ) -> CertCheck {
     let cert = match russh::keys::Certificate::from_openssh(cert_line) {
         Ok(c) => c,
         Err(_) => return CertCheck::Unusable("unparseable"),
     };
-    // The certificate must certify exactly this private key.
-    if cert.public_key() != private_key.public_key().key_data() {
+    // The certificate must certify exactly this key.
+    if cert.public_key() != public_key {
         return CertCheck::Unusable("does not match the private key");
     }
     let expired = now_unix != 0 && cert.valid_before() != 0 && now_unix > cert.valid_before();
@@ -1421,7 +1633,7 @@ mod cert_tests {
     fn matching_cert_is_offered() {
         let key = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
         let cert = make_cert(&key, 4_000_000_000); // far future
-        match check_certificate(&cert, &key, 1_700_000_000) {
+        match check_certificate(&cert, key.public_key().key_data(), 1_700_000_000) {
             CertCheck::Offer { expired, .. } => assert!(!expired),
             CertCheck::Unusable(w) => panic!("expected offer, got {w}"),
         }
@@ -1431,7 +1643,7 @@ mod cert_tests {
     fn expired_cert_is_still_offered_flagged() {
         let key = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
         let cert = make_cert(&key, 1_000); // long past
-        match check_certificate(&cert, &key, 1_700_000_000) {
+        match check_certificate(&cert, key.public_key().key_data(), 1_700_000_000) {
             CertCheck::Offer { expired, .. } => assert!(expired, "should flag expiry"),
             CertCheck::Unusable(w) => panic!("expired cert must still be offered, got {w}"),
         }
@@ -1443,7 +1655,7 @@ mod cert_tests {
         let other = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
         let cert = make_cert(&other, 4_000_000_000); // certifies `other`, not `key`
         assert!(matches!(
-            check_certificate(&cert, &key, 1_700_000_000),
+            check_certificate(&cert, key.public_key().key_data(), 1_700_000_000),
             CertCheck::Unusable(_)
         ));
     }
@@ -1452,7 +1664,7 @@ mod cert_tests {
     fn garbage_cert_line_is_unusable() {
         let key = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
         assert!(matches!(
-            check_certificate("not a certificate", &key, 0),
+            check_certificate("not a certificate", key.public_key().key_data(), 0),
             CertCheck::Unusable(_)
         ));
     }

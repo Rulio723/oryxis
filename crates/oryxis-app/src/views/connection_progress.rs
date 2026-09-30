@@ -982,6 +982,7 @@ impl Oryxis {
                     message_cell.into(),
                 ])
                 .align_y(iced::Alignment::Start)
+                .height(Length::Shrink)
                 .into(),
             );
         }

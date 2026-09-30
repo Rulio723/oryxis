@@ -26,12 +26,17 @@ impl Oryxis {
 
         // Auth method picker, options + current selection mirror the host
         // editor's auth picker so the labels match.
+        let offer_security_key =
+            crate::util::security_key_method_offered(&self.prefs.default_auth_method);
         let auth_options: Vec<String> = [
-            crate::i18n::t("auth_auto"), crate::i18n::t("auth_password"),
-            crate::i18n::t("auth_key"), crate::i18n::t("auth_certificate"),
-            crate::i18n::t("auth_agent"), crate::i18n::t("auth_interactive"),
+            Some(crate::i18n::t("auth_auto")), Some(crate::i18n::t("auth_password")),
+            Some(crate::i18n::t("auth_key")),
+            offer_security_key.then(|| crate::i18n::t("auth_security_key")),
+            Some(crate::i18n::t("auth_certificate")),
+            Some(crate::i18n::t("auth_agent")), Some(crate::i18n::t("auth_interactive")),
         ]
-        .iter()
+        .into_iter()
+        .flatten()
         .map(|s| s.to_string())
         .collect();
         let auth_selected = crate::util::auth_method_label(&self.prefs.default_auth_method);

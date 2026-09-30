@@ -1,6 +1,6 @@
 # Architecture
 
-Oryxis is a Cargo workspace of 29 crates. The UI layer is an
+Oryxis is a Cargo workspace of 30 crates. The UI layer is an
 [iced](https://iced.rs) application on the wgpu backend; everything below it
 is a set of focused engines (SSH, Telnet, serial, vault, sync, terminal)
 that the app composes.
@@ -23,6 +23,8 @@ that the app composes.
 | oryxis-zmodem  sz/rz engine  |                                     |
 | oryxis-archive tar/zip over  |                                     |
 |   SFTP + local codecs        |                                     |
+| oryxis-fido2   FIDO2 tokens: |                                     |
+|   CTAP2 / HID, Windows Hello |                                     |
 +--------------------------------------------------------------------+
 | Cloud providers + plugin subsystem                                 |
 | oryxis-cloud              provider trait (discovery + transport)   |
@@ -56,6 +58,7 @@ that the app composes.
 | `oryxis-core` | Shared model types: Connection, SshKey, Identity, ProxyIdentity, Group, Snippet, KnownHost, PortForwardRule, SessionGroup, CloudAccount, custom themes, LogEntry |
 | `oryxis-terminal` | Terminal widget: alacritty_terminal + custom canvas widget + PTY + themes + URL/IP/path detection |
 | `oryxis-ssh` | SSH engine: auto-auth, jump hosts, SOCKS/HTTP/Command proxy, Local/Remote/Dynamic forwarding, SFTP, TOFU, RSA-SHA2 |
+| `oryxis-fido2` | FIDO2 token transport with nothing SSH in it: CTAPHID framing, CTAP2 `authenticatorGetAssertion` with PIN/UV auth protocols 1 and 2, and the per-platform ways to reach a token (Windows Hello, raw HID on Windows, Linux and macOS), cancellable from another thread. `oryxis-ssh::sk` frames what it returns as an OpenSSH `sk-*` signature |
 | `oryxis-mosh` | mosh carried over an SSH host: the `mosh-server` handover (remote command synthesis with shell quoting, announcement parsing) and the UDP session that follows, driving the `mosh-rs` crate and publishing escape bytes so the pane reads it like any other transport |
 | `oryxis-telnet` | Native Telnet engine: RFC 854/855 option negotiation (RFC 1143 state machine), NAWS, terminal-type, charset transcoding, TLS (`telnets`), plus the raw-TCP mode console servers expose serial lines on |
 | `oryxis-serial` | Serial console sessions: COM / `/dev/tty*`, configurable baud, framing, flow control, line endings, local echo |

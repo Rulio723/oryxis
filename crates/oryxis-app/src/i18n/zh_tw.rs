@@ -2299,6 +2299,16 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "cert_no_keys_hint" => "保險庫中還沒有附加憑證的金鑰。",
         "cert_key_no_cert_hint" => "所選金鑰沒有附加憑證。",
 
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "安全金鑰",
+        "security_key_help" => "只嘗試此硬體金鑰，不使用代理程式、其他金鑰或密碼備援。金鑰不存在或拒絕觸碰時，連線將失敗。",
+        "security_key_none_imported" => "保險庫中還沒有安全金鑰。請匯入 ssh-keygen 產生的 id_ed25519_sk / id_ecdsa_sk 檔案。",
+        "sk_pin_title" => "安全金鑰 PIN",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "PIN 錯誤。金鑰鎖定前還剩 {n} 次嘗試。",
+        "sk_touch_notice" => "請觸碰安全金鑰以繼續",
+        "sk_verify_notice" => "請在安全金鑰上驗證（PIN 或指紋）以繼續",
+        "security_key_unsupported_platform" => "此平台尚無法以安全金鑰簽署（Windows、macOS 與 Linux 可以）。請改用「代理程式」方式，由持有該金鑰的 ssh-agent 簽署。",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "匯入公鑰",
         "key_badge_security_key" => "安全金鑰",

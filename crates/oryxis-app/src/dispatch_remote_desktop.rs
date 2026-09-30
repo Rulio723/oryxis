@@ -235,6 +235,9 @@ impl Oryxis {
                         crate::i18n::t("auth_password_prompt_title").to_string(),
                         crate::i18n::t("password").to_string(),
                     )
+                    // Launched by the user from the host: a touch may be
+                    // asked for.
+                    .with_security_key_prompts(crate::connect_methods::security_key_prompts(None))
                     .with_keepalive(keepalive)
                     .with_address_family(address_family)
                     .with_rekey_limit_mb(rekey_limit_mb)

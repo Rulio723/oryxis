@@ -1,0 +1,56 @@
+[package]
+name = "oryxis-fido2"
+version = "0.1.0"
+edition = "2024"
+
+# The FIDO2 token transport and nothing SSH: CTAPHID framing, the CTAP2
+# `authenticatorGetAssertion` exchange with its PIN protocol, and the
+# per-platform ways of reaching a token (Windows Hello, raw HID on
+# Windows, Linux and macOS). `oryxis-ssh` owns what the signature MEANS;
+# this crate only owns how to ask a token for one.
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+# CTAPHID_INIT nonce and the PIN protocol's ephemeral key agreement.
+getrandom = "0.4"
+# clientDataHash, and the PIN protocol's shared-secret derivation.
+sha2 = "0.11"
+# CTAP2 PIN/UV auth protocols 1 and 2: ECDH over P-256 with the token,
+# AES-256-CBC around the PIN hash and the returned token, HMAC-SHA-256
+# for pinUvAuthParam, HKDF-SHA-256 for protocol 2's key split. Every one
+# is already in the lock as a transitive of the ssh-key / russh stack.
+p256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdh", "std"] }
+aes = "0.9"
+cbc = "0.2"
+hmac = "0.13"
+hkdf = "0.13"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+    # SetupAPI walks the HID class, `hid.dll` says which interface is the
+    # FIDO one, and the CTAPHID channel is an overlapped read/write pair.
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_HumanInterfaceDevice",
+    "Win32_System_IO",
+    # `webauthn.dll` is loaded at run time rather than linked, so a
+    # machine without it falls back to HID instead of failing to start.
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# IOKit HID + the CoreFoundation run loop it reports through. Both are
+# already in the lock (serial ports, the windowing stack).
+core-foundation-sys = "0.8"
+io-kit-sys = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# `/dev/hidraw*`: open / poll(2) / read / write. The report descriptor is
+# read from sysfs, so no ioctl is needed. Already in the lock.
+libc = "0.2"

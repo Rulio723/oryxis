@@ -15,6 +15,17 @@ coming next, see the [Roadmap](../README.md#roadmap).
   continue through every remaining factor instead of dying on the
   first. A stored TOTP secret answers the verification-code round
   silently; without one, the prompt surfaces the way OpenSSH would.
+- **Security keys, natively.** A YubiKey or any FIDO2 token signs in
+  with no `ssh-agent` in between: import the `id_ed25519_sk` or
+  `id_ecdsa_sk` file `ssh-keygen` produced (or point the host at it in
+  `~/.ssh`) and Oryxis asks the token itself, touch prompt and PIN
+  included. The **Security Key** auth method offers that token and
+  nothing else. Windows signs through Windows Hello, so no administrator
+  rights are needed (and NFC or Bluetooth tokens work through the same
+  dialog); Linux talks to USB tokens over `hidraw`, macOS through IOKit.
+  Background
+  connections (the MCP server, boot-time forwards, the monitor) never
+  raise a touch prompt nobody asked for.
 - **Full SSH pipeline.** Direct, SOCKS4/5, HTTP CONNECT, ProxyCommand,
   multi-hop jump host chaining, and port forwarding via
   [russh](https://github.com/warp-tech/russh).

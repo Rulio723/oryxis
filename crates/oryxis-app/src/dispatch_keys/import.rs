@@ -344,7 +344,11 @@ impl Oryxis {
                 if let Some(existing) =
                     self.keys.iter().find(|k| k.id == existing_id)
                 {
-                    key.expose_via_agent = existing.expose_via_agent;
+                    // Same rule as the private path: a security-key row is
+                    // never agent-exposed, however the row it replaces was
+                    // set up.
+                    key.expose_via_agent =
+                        existing.expose_via_agent && !key.algorithm.is_security_key();
                     key.created_at = existing.created_at;
                 }
                 // Editing an existing row keeps its private column
@@ -459,7 +463,13 @@ impl Oryxis {
                     if let Some(existing) =
                         self.keys.iter().find(|k| k.id == existing_id)
                     {
-                        generated.key.expose_via_agent = existing.expose_via_agent;
+                        // A security key is never agent-exposed: our agent
+                        // would have to hand a credential handle to a
+                        // software signer, and the key menu hides the
+                        // toggle for one, so the stored flag is not the
+                        // user's to carry over here.
+                        generated.key.expose_via_agent = existing.expose_via_agent
+                            && !generated.key.algorithm.is_security_key();
                         generated.key.created_at = existing.created_at;
                     }
                 }

@@ -2331,6 +2331,16 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "Klucz publiczny nie pasuje do klucza prywatnego.",
         "cert_no_keys_hint" => "Żaden klucz w sejfie nie ma jeszcze dołączonego certyfikatu.",
         "cert_key_no_cert_hint" => "Wybrany klucz nie ma dołączonego certyfikatu.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Klucz bezpieczeństwa",
+        "security_key_help" => "Zostanie użyty tylko ten klucz sprzętowy: bez agenta, innego klucza ani hasła zapasowego. Brak klucza lub odrzucenie dotknięcia spowoduje niepowodzenie połączenia.",
+        "security_key_none_imported" => "W skarbcu nie ma jeszcze klucza bezpieczeństwa. Zaimportuj plik id_ed25519_sk / id_ecdsa_sk utworzony przez ssh-keygen.",
+        "sk_pin_title" => "PIN klucza bezpieczeństwa",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "Błędny PIN. Pozostało prób przed zablokowaniem klucza: {n}.",
+        "sk_touch_notice" => "Dotknij klucza bezpieczeństwa, aby kontynuować",
+        "sk_verify_notice" => "Potwierdź na kluczu bezpieczeństwa (PIN lub odcisk palca), aby kontynuować",
+        "security_key_unsupported_platform" => "Ta platforma nie potrafi jeszcze podpisywać kluczem bezpieczeństwa (Windows, macOS i Linux potrafią). Użyj metody Agent z ssh-agent, który przechowuje klucz.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importuj klucz publiczny",
         "key_badge_security_key" => "Klucz bezpieczeństwa",

@@ -39,6 +39,9 @@ pub enum SshMessage {
     /// The same for a split-pane / in-place dial (no card): written into
     /// the pane as a dim marker line.
     SshPaneProxyOutput(Uuid, oryxis_ssh::ProxyOutputLine),
+    /// A split-pane / in-place dial's security key is waiting on a person:
+    /// "touch your key" as a dim marker line in that pane.
+    SshPaneSecurityKey(Uuid, oryxis_ssh::SecurityKeyNotice),
     SshConnected(Uuid, crate::state::TerminalTransport),  // (pane_id, transport)
     /// Opening a session on a pooled connection failed (F2 reuse), so
     /// the pane dials for real: `(pane_id)`. The tab index is

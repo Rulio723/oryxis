@@ -2336,6 +2336,16 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "Το δημόσιο κλειδί δεν ταιριάζει με το ιδιωτικό κλειδί.",
         "cert_no_keys_hint" => "Κανένα κλειδί στο vault δεν έχει ακόμη συνημμένο πιστοποιητικό.",
         "cert_key_no_cert_hint" => "Το επιλεγμένο κλειδί δεν έχει συνημμένο πιστοποιητικό.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Κλειδί ασφαλείας",
+        "security_key_help" => "Θα χρησιμοποιηθεί μόνο αυτό το κλειδί υλικού: χωρίς agent, άλλο κλειδί ή εφεδρικό κωδικό. Αν λείπει το κλειδί ή απορριφθεί το άγγιγμα, η σύνδεση θα αποτύχει.",
+        "security_key_none_imported" => "Δεν υπάρχει ακόμη κλειδί ασφαλείας στο θησαυροφυλάκιο. Εισαγάγετε το αρχείο id_ed25519_sk / id_ecdsa_sk που δημιούργησε το ssh-keygen.",
+        "sk_pin_title" => "PIN κλειδιού ασφαλείας",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "Λάθος PIN. Απομένουν {n} προσπάθειες πριν κλειδώσει το κλειδί.",
+        "sk_touch_notice" => "Αγγίξτε το κλειδί ασφαλείας για να συνεχίσετε",
+        "sk_verify_notice" => "Επαληθεύστε στο κλειδί ασφαλείας (PIN ή δακτυλικό αποτύπωμα) για να συνεχίσετε",
+        "security_key_unsupported_platform" => "Αυτή η πλατφόρμα δεν μπορεί ακόμη να υπογράφει με κλειδί ασφαλείας (τα Windows, macOS και το Linux μπορούν). Χρησιμοποιήστε τη μέθοδο Agent με ένα ssh-agent που κρατά το κλειδί.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Εισαγωγή δημόσιου κλειδιού",
         "key_badge_security_key" => "Κλειδί ασφαλείας",

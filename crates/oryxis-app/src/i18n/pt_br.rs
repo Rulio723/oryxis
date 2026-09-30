@@ -2300,6 +2300,16 @@ pub(super) fn lookup(key: &str) -> Option<&'static str> {
         "public_key_mismatch_error" => "A chave pública não corresponde à chave privada.",
         "cert_no_keys_hint" => "Nenhuma chave no cofre tem um certificado anexado ainda.",
         "cert_key_no_cert_hint" => "A chave selecionada não tem certificado anexado.",
+        // Hardware security keys (native FIDO2)
+        "auth_security_key" => "Chave de segurança",
+        "security_key_help" => "Somente esta chave de hardware será oferecida: sem agente, outra chave ou senha alternativa. Se a chave estiver ausente ou o toque for recusado, a conexão falhará.",
+        "security_key_none_imported" => "Ainda não há uma chave de segurança no cofre. Importe o arquivo id_ed25519_sk / id_ecdsa_sk criado pelo ssh-keygen.",
+        "sk_pin_title" => "PIN da chave de segurança",
+        "sk_pin_label" => "PIN",
+        "sk_pin_retry" => "PIN incorreto. Restam {n} tentativas antes de a chave bloquear.",
+        "sk_touch_notice" => "Toque na sua chave de segurança para continuar",
+        "sk_verify_notice" => "Confirme na sua chave de segurança (PIN ou digital) para continuar",
+        "security_key_unsupported_platform" => "Esta plataforma ainda não assina com chave de segurança (Windows, macOS e Linux sim). Use o método Agente com um ssh-agent que tenha a chave.",
         // FIDO2 / PKCS#11 delegation (B3)
         "import_public_key" => "Importar chave pública",
         "key_badge_security_key" => "Chave de segurança",
