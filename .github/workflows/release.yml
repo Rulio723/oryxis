@@ -414,10 +414,11 @@ jobs:
             $version = "0.0.0"
           }
           cd resources
-          # System installer (UAC, %ProgramFiles%) — winget targets this one.
+          # System installer (UAC, %ProgramFiles%): winget's `Scope: machine`.
           makensis "/DVERSION=$version" "/DARCH=x86_64" "/DBINPATH=..\target\release" installer.nsi
-          # Per-user installer (no UAC, %LOCALAPPDATA%) — auto-updater
-          # picks this when the running exe lives under LOCALAPPDATA.
+          # Per-user installer (no UAC, %LOCALAPPDATA%): winget's `Scope: user`,
+          # and the one the auto-updater picks when the running exe lives
+          # under LOCALAPPDATA.
           makensis "/DVERSION=$version" "/DARCH=x86_64" "/DBINPATH=..\target\release" installer-user.nsi
 
       # --- Authenticode-sign the two NSIS installers via SignPath. Each is a
@@ -916,13 +917,14 @@ jobs:
         uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e
         with:
           identifier: WilsonGlasser.Oryxis
-          # Match both x86_64 and aarch64 system installers in a single
-          # submission. Komac (the action's backend) reads the PE
-          # header of each .exe and emits one manifest with multiple
-          # `Installers:` entries — same pattern Edge / Bun / Node use.
-          # The per-user installers (oryxis-user-setup-*) are
-          # deliberately excluded; winget targets the system installer.
-          installers-regex: 'oryxis-setup-(x86_64|aarch64)\.exe$'
+          # Match all four installers (x86_64 / aarch64, system and
+          # per-user) in a single submission. Komac (the action's
+          # backend) updates the published manifest, which since
+          # winget-pkgs PR #443970 (0.19.0) carries both scopes on both
+          # architectures: the system installers as `Scope: machine`,
+          # the oryxis-user-setup-* ones as `Scope: user`. Every entry
+          # there needs a URL here, or the next version cannot carry it.
+          installers-regex: 'oryxis-(user-)?setup-(x86_64|aarch64)\.exe$'
           token: ${{ secrets.WINGET_TOKEN }}
 
   # Sync the published assets + API snapshots to the download mirror
