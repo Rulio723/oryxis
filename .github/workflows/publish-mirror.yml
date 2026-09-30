@@ -202,8 +202,10 @@ jobs:
       # is the file that stays hot and therefore the one that goes stale,
       # and mainland China is then told about the previous release for as
       # long as that copy lives. Assets are safe by construction (a new tag
-      # is a new path nobody has cached); only these three names are
-      # rewritten in place, so only these three are purged.
+      # is a new path nobody has cached); only names rewritten in place
+      # are purged: the three release snapshots, and on a plugin release
+      # `plugins/<provider>.json`, the catalog every install reads (left
+      # out, mcp 0.1.6 went on reading as 0.1.5 in China).
       - name: Purge the China edge
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
@@ -219,10 +221,16 @@ jobs:
           # from a bad key: a malformed canonical request signs cleanly and
           # is refused as an authentication failure.
           python3 .github/scripts/edgeone_purge.py --selftest
-          python3 .github/scripts/edgeone_purge.py \
-            https://dl-cn.oryxis.app/releases/latest.json \
-            https://dl-cn.oryxis.app/releases/nightly.json \
+          urls=(
+            https://dl-cn.oryxis.app/releases/latest.json
+            https://dl-cn.oryxis.app/releases/nightly.json
             https://dl-cn.oryxis.app/releases/index.json
+          )
+          provider="${TAG%%-v*}"
+          if [ "$provider" != "$TAG" ]; then
+            urls+=("https://dl-cn.oryxis.app/plugins/$provider.json")
+          fi
+          python3 .github/scripts/edgeone_purge.py "${urls[@]}"
 
       - name: Verify through the public endpoint
         env:
@@ -242,9 +250,31 @@ jobs:
           # A 200 says the file is reachable, not that it is THIS release:
           # a stale edge answers 200 all day with last month's tag. So the
           # check reads the tag out of the body, on both legs, which is the
-          # question a user's update check actually asks. Only for `v*`
-          # tags, since plugin releases do not move `latest.json`.
+          # question a user's update check actually asks. `v*` tags read
+          # `latest.json`; a plugin tag reads its own catalog file, whose
+          # first listed version must be the one this run published.
           case "$TAG" in
+            *-v*)
+              provider="${TAG%%-v*}"
+              want="${TAG#*-v}"
+              for host in dl.oryxis.app dl-cn.oryxis.app; do
+                got=""
+                for _ in $(seq 1 32); do
+                  got=$(curl -fsS "https://$host/plugins/$provider.json" \
+                    | python3 -c 'import json,sys; print((json.load(sys.stdin).get("versions") or [{}])[0].get("version",""))') || true
+                  [ "$got" = "$want" ] && break
+                  sleep 10
+                done
+                if [ "$got" = "$want" ]; then
+                  echo "$host: plugins/$provider.json is $got"
+                elif [ "$host" = "dl-cn.oryxis.app" ] && [ "$PURGED" != "true" ]; then
+                  echo "::warning::$host still serves $provider $got; purge its cache or add the EdgeOne credentials"
+                else
+                  echo "::error::$host serves $provider $got, expected $want"
+                  exit 1
+                fi
+              done
+              ;;
             v*)
               for host in dl.oryxis.app dl-cn.oryxis.app; do
                 got=""
